@@ -1,0 +1,5 @@
+init
+.env
+node_modules
+assets
+config
