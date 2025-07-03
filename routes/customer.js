@@ -24,7 +24,8 @@ const {
   registerFCM,
   getAddOns,
   codOrderConfirm,
-  toggleNotification
+  toggleNotification,
+  checkAlert
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
@@ -39,6 +40,8 @@ router.post("/get-addons", wrapAsync(getAddOns));
 router.post("/getotp", wrapAsync(getOTP));
 router.post("/register", wrapAsync(registerData));
 router.post("/login", wrapAsync(login));
+
+router.get("/checkAlert", wrapAsync(checkAlert));
 
 // Protected Routes (authentication required)
 router.get("/:id/profile", authMiddleware, wrapAsync(profile));// Only authenticated users can access profile

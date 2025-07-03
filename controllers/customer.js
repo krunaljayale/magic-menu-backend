@@ -10,6 +10,7 @@ const PastOrder = require("../models/pastOrder");
 const PaymentLog = require("../models/paymentLog");
 const Rider = require("../models/rider");
 const EmailOtp = require("../models/emailOTP");
+const GlobalAlert = require("../models/globalAlert");
 const { sendEmail } = require("../utils/emailSender");
 const {
   generateTransactionID,
@@ -66,6 +67,21 @@ module.exports.data = async (req, res) => {
 
   // 7. Send enriched data
   res.status(200).json(enrichedOwners);
+};
+
+module.exports.checkAlert = async (req, res) => {
+  try {
+    const data = await GlobalAlert.findOne();
+
+    if (data.isActive) {
+      res.status(200).json(data);
+    } else {
+      res.status(404).json({ message: "No alert at this moment" });
+    }
+  } catch (error) {
+    console.error("Error fetching alert:", error);
+    res.status(500).json({ message: "Server error", error });
+  }
 };
 
 module.exports.hotelData = async (req, res) => {
@@ -195,7 +211,6 @@ module.exports.getOTP = async (req, res) => {
       status: "Success",
       message: "OTP sent to email successfully",
     });
-
   } catch (err) {
     console.error("Error in getOTP:", err);
     return res.status(500).json({
@@ -265,7 +280,6 @@ module.exports.registerData = async (req, res) => {
       status: "Success",
       message: "User registered successfully",
     });
-
   } catch (error) {
     console.error("Error in registerData:", error);
     return res.status(500).json({
@@ -332,7 +346,9 @@ module.exports.login = async (req, res) => {
 
 module.exports.profile = async (req, res) => {
   let { id } = req.params;
-  let data = await Customer.findById(id).select('name number email notificationsEnabled');
+  let data = await Customer.findById(id).select(
+    "name number email notificationsEnabled"
+  );
   res.send(data);
 };
 
@@ -791,7 +807,7 @@ module.exports.paymentInitiate = async (req, res) => {
           status: "PENDING",
           customer: user_id,
           amount: sub_Total,
-          mode:'ONLINE'
+          mode: "ONLINE",
         },
       ],
       { session }
@@ -844,7 +860,7 @@ module.exports.paymentConfirm = async (req, res) => {
       { status: "SUCCESS" },
       { new: true }
     );
-    
+
     if (!paymentRecord) {
       return res.status(404).json({
         status: "Failure",
@@ -1008,12 +1024,7 @@ module.exports.codOrderConfirm = async (req, res) => {
   try {
     const { user_id, orderItems, locationIndex, amount } = req.body;
 
-    if (
-      !user_id ||
-      !orderItems?.length ||
-      locationIndex == null ||
-      !amount
-    ) {
+    if (!user_id || !orderItems?.length || locationIndex == null || !amount) {
       return res
         .status(400)
         .json({ status: "Failure", message: "Missing required fields" });
