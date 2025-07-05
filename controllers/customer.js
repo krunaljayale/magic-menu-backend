@@ -18,55 +18,108 @@ const {
 } = require("../utils/paymentUtils");
 const { calculateDistance } = require("../utils/mapUtils");
 // const { initiatePayment } = require("../utils/paymentHandler");
+const turf = require("@turf/turf");
+const { serviceAreas } = require("../utils/serviceAreas");
 
 module.exports.data = async (req, res) => {
-  const { user_id } = req.params;
+  try {
+    const { user_id } = req.params;
+    const { location } = req.body;
 
-  // 1. Fetch the customer
-  const customer = await Customer.findById(user_id);
-  if (!customer) {
-    return res.status(404).json({ error: "Customer not found" });
-  }
+    const customer = await Customer.findById(user_id);
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
 
-  // 2. Look for a default location
-  const defaultLoc = Array.isArray(customer.location)
-    ? customer.location.find((loc) => loc.isDefault)
-    : null;
+    const defaultLoc = Array.isArray(customer.location)
+      ? customer.location.find((loc) => loc.isDefault)
+      : null;
 
-  // 3. Fetch all serving owners
-  const owners = await Owner.find();
+    // 🧠 Helper to match location with buffered service areas
+    const getMatchingServiceArea = (lat, lon) => {
+      const point = turf.point([lon, lat]); // [lon, lat]
+      return serviceAreas.find((area) => {
+        const rawPolygon = turf.polygon([area.polygon[0]]);
+        const bufferedPolygon = turf.buffer(rawPolygon, 0.3, {
+          units: "kilometers",
+        });
+        return turf.booleanPointInPolygon(point, bufferedPolygon);
+      });
+    };
 
-  // 4. If no default location, send the raw owners data
-  if (!defaultLoc) {
-    return res.status(200).json(owners);
-  }
+    let selectedCoords = null;
+    let matchedArea = null;
 
-  // 5. Now that we know defaultLoc exists, destructure safely
-  const { latitude: custLat, longitude: custLon } = defaultLoc;
+    // ✅ 1. Try location.coords first
+    if (location?.coords?.latitude && location?.coords?.longitude) {
+      const lat = location.coords.latitude;
+      const lon = location.coords.longitude;
 
-  // 6. Compute delivery times per owner
-  const enrichedOwners = owners.map((ownerDoc) => {
-    const owner = ownerDoc.toObject();
-    const { latitude: ownLat, longitude: ownLon } = owner.location || {};
-
-    // If an owner somehow lacks coords, skip the calculation and return raw
-    if (ownLat == null || ownLon == null) {
-      return owner;
+      const area = getMatchingServiceArea(lat, lon);
+      if (area) {
+        selectedCoords = { latitude: lat, longitude: lon };
+        matchedArea = area;
+      }
     }
 
-    const distanceKm = calculateDistance(custLat, custLon, ownLat, ownLon);
-    const travelTimeMin = (distanceKm / 25) * 60;
-    const deliveryTimeMin = Math.round(travelTimeMin + 10);
+    // ✅ 2. Fallback to default location
+    if (!matchedArea && defaultLoc?.latitude && defaultLoc?.longitude) {
+      const area = getMatchingServiceArea(
+        defaultLoc.latitude,
+        defaultLoc.longitude
+      );
+      if (area) {
+        selectedCoords = defaultLoc;
+        matchedArea = area;
+      }
+    }
 
-    return {
-      ...owner,
-      distanceKm: Math.round(distanceKm),
-      deliveryTimeMin,
-    };
-  });
+    // ✅ 3. If still not inside any area, reject
+    if (!selectedCoords || !matchedArea) {
+      return res.status(403).json({
+        error: "You're outside our service area",
+        code: "OUT_OF_SERVICE_AREA",
+      });
+    }
 
-  // 7. Send enriched data
-  res.status(200).json(enrichedOwners);
+    const { latitude: custLat, longitude: custLon } = selectedCoords;
+
+    // Use non-buffered polygon for hotel filtering (precise delivery zone)
+    const polygon = turf.polygon([matchedArea.polygon[0]]);
+
+    // ✅ 4. Filter owners inside the matched polygon
+    const owners = await Owner.find();
+    const filteredOwners = owners.filter((owner) => {
+      const { latitude, longitude } = owner?.location || {};
+      if (!latitude || !longitude) return false;
+
+      const point = turf.point([longitude, latitude]);
+      return turf.booleanPointInPolygon(point, polygon);
+    });
+
+    // ✅ 5. Enrich owners with distance and ETA
+    const enrichedOwners = filteredOwners.map((ownerDoc) => {
+      const owner = ownerDoc.toObject();
+      const { latitude: ownLat, longitude: ownLon } = owner.location;
+
+      const distanceKm = calculateDistance(custLat, custLon, ownLat, ownLon);
+      const travelTimeMin = (distanceKm / 25) * 60;
+      const rawDeliveryTime = travelTimeMin + 10;
+
+      // ✅ Enforce minimum display values
+      const safeDistanceKm = distanceKm.toFixed(2);
+      const safeDeliveryTimeMin = Math.max(10, Math.round(rawDeliveryTime));
+
+      return {
+        ...owner,
+        distanceKm: safeDistanceKm,
+        deliveryTimeMin: safeDeliveryTimeMin,
+      };
+    });
+
+    return res.status(200).json(enrichedOwners);
+  } catch (err) {
+    console.error("Error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 };
 
 module.exports.checkAlert = async (req, res) => {
@@ -91,7 +144,7 @@ module.exports.hotelData = async (req, res) => {
     // Fetching customer default location and hotel data in parallel for speed
     const [customerData, hotelData] = await Promise.all([
       Customer.findById(_id, "location").lean(),
-      Owner.findById(id).lean(),
+      Owner.findById(id, "-password -__v").lean(),
     ]);
 
     if (!customerData || !hotelData) {
@@ -113,12 +166,16 @@ module.exports.hotelData = async (req, res) => {
     const { latitude: lat2, longitude: lon2 } = hotelData.location;
 
     const averageSpeed = 25; // km/h
-    const distance = calculateDistance(lat1, lon1, lat2, lon2).toFixed(2);
-    const estimatedDeliveryTime = ((distance / averageSpeed) * 60).toFixed(2);
+    const rawDistance = calculateDistance(lat1, lon1, lat2, lon2); // float km
+    const rawTime = (rawDistance / averageSpeed) * 60 + 10; // float min
 
-    // Adding distance and estimated time directly to hotelData
-    hotelData.distance = Math.round(distance);
-    hotelData.estimatedTime = Math.round(estimatedDeliveryTime);
+    // ✅ Store raw (if needed)
+    hotelData.rawDistance = +rawDistance.toFixed(2);
+    hotelData.rawEstimatedTime = +rawTime.toFixed(2);
+
+    // ✅ Display values (always ≥ 1 km and 10 min)
+    hotelData.distance = rawDistance.toFixed(2);
+    hotelData.estimatedTime = Math.max(10, Math.round(rawTime));
 
     res.send(hotelData);
   } catch (error) {
@@ -496,6 +553,7 @@ module.exports.updateAddress = async (req, res) => {
       houseNo,
       buildingNo,
       landmark,
+      isDefault: existingUser.location[addressIndex].isDefault,
     };
 
     await existingUser.save();

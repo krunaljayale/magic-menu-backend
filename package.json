@@ -9,6 +9,7 @@
   "author": "Krunal Jayale",
   "license": "ISC",
   "dependencies": {
+    "@turf/turf": "^7.2.0",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
     "dot-env": "^0.0.1",

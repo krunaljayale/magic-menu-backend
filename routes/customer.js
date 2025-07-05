@@ -33,7 +33,7 @@ const authMiddleware = require("../utils/jwtAuth");
 
 
 // Public Routes (no authentication required)
-router.get("/:user_id/data",wrapAsync(data));
+router.post("/:user_id/data",authMiddleware,wrapAsync(data));
 router.get("/:_id/:id/hotelData", wrapAsync(hotelData));
 router.get("/:id/listingData/:category", wrapAsync(listingData));
 router.post("/get-addons", wrapAsync(getAddOns));
