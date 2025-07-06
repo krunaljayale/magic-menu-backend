@@ -11,9 +11,6 @@ const PastOrder = require("../models/pastOrder");
 const RestaurantSettlement = require("../models/restaurantSettlement");
 const moment = require("moment-timezone");
 
-
-
-
 module.exports.getOTP = async (req, res) => {
   const { name, email, number } = req.body;
 
@@ -252,15 +249,32 @@ module.exports.toggleDuty = async (req, res) => {
       });
     }
 
-    // Toggle isServing status
+    // 🔥 Check time before allowing to start serving
+    const owner = await Owner.findById(id);
+    if (!owner) {
+      return res.status(404).json({ message: "Owner not found." });
+    }
+
+    const istNow = moment().tz("Asia/Kolkata"); // current time in IST
+    const isBefore10AM = istNow.hour() < 10;
+
+    if (isBefore10AM && !owner.isServing) {
+      // Trying to toggle ON before 10 AM
+      return res.status(403).json({
+        message:
+          "Cannot start serving before 10:00 AM IST as no riders are available.",
+      });
+    }
+
+    // Toggle isServing using aggregation pipeline
     const result = await Owner.updateOne({ _id: id }, [
       { $set: { isServing: { $not: "$isServing" } } },
     ]);
 
     if (result.modifiedCount === 0) {
-      return res
-        .status(404)
-        .json({ message: "Owner not found or already in the desired state." });
+      return res.status(404).json({
+        message: "Owner not found or already in the desired state.",
+      });
     }
 
     return res
@@ -648,14 +662,19 @@ module.exports.almostReadyOrder = async (req, res) => {
 
   try {
     // Check the current order
-    const currentOrder = await LiveOrder.findById(order_id).populate("hotel", "hotel");
+    const currentOrder = await LiveOrder.findById(order_id).populate(
+      "hotel",
+      "hotel"
+    );
 
     if (!currentOrder) {
       return res.status(404).json({ error: "Order not found" });
     }
 
     if (currentOrder.restaurantStatus === "ALMOST_READY") {
-      return res.status(200).json({ message: "Already marked as ALMOST_READY" });
+      return res
+        .status(200)
+        .json({ message: "Already marked as ALMOST_READY" });
     }
 
     // Update status to ALMOST_READY
@@ -689,7 +708,9 @@ module.exports.almostReadyOrder = async (req, res) => {
       };
 
       if (typeof admin.messaging().sendMulticast === "function") {
-        sendRes = await admin.messaging().sendMulticast({ ...payload, tokens: allTokens });
+        sendRes = await admin
+          .messaging()
+          .sendMulticast({ ...payload, tokens: allTokens });
       } else {
         // Fallback for older SDKs: send one-by-one
         const results = await Promise.all(
@@ -733,7 +754,9 @@ module.exports.almostReadyOrder = async (req, res) => {
       );
     }
 
-    return res.status(200).json({ status: "ALMOST_READY", notificationSent: sendRes.successCount });
+    return res
+      .status(200)
+      .json({ status: "ALMOST_READY", notificationSent: sendRes.successCount });
   } catch (error) {
     console.error("Error updating order status:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -1668,8 +1691,9 @@ module.exports.getWeeklyPayoutsReport = async (req, res) => {
       return res.status(400).json({ message: "Missing hotel ID" });
     }
 
-    const settlements = await RestaurantSettlement.find({ hotel: hotelId })
-      .sort({ weekStart: -1 }); // Most recent first
+    const settlements = await RestaurantSettlement.find({
+      hotel: hotelId,
+    }).sort({ weekStart: -1 }); // Most recent first
 
     return res.status(200).json({ settlements });
   } catch (error) {
