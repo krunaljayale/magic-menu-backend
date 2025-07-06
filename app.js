@@ -55,6 +55,11 @@ app.get("/", (req, res) => {
   `);
 });
 
+app.get('/install', (req, res) => {
+  res.redirect(process.env.REDIRECT_URL);
+});
+
+
 const start = async () => {
   try {
     await connectDB(process.env.MONGO_URI);

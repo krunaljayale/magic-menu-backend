@@ -473,32 +473,61 @@ module.exports.categorySuggestion = async (req, res) => {
 };
 
 module.exports.categoryRestaurant = async (req, res) => {
-  const { category } = req.params;
+  const { user_id, category } = req.params;
 
   try {
+    const customer = await Customer.findById(user_id);
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const defaultLoc = Array.isArray(customer.location)
+      ? customer.location.find((loc) => loc.isDefault)
+      : null;
+
+    if (!defaultLoc) {
+      return res.status(400).json({ error: "Default location not set" });
+    }
+
+    const userPoint = turf.point([defaultLoc.longitude, defaultLoc.latitude]);
+
+    // Check if user's location is within any service area
+    const matchedArea = serviceAreas.find((area) =>
+      turf.booleanPointInPolygon(userPoint, turf.polygon(area.polygon))
+    );
+
+    if (!matchedArea) {
+      return res.status(403).json({ error: "Location not in a servable area" });
+    }
+
+    // Proceed if location is valid
     const data = await Listing.aggregate([
       {
-        $match: { category: category }, // Match listings by category
+        $match: { category: category },
       },
       {
         $group: {
-          _id: "$owner", // Group by owner
+          _id: "$owner",
         },
       },
       {
         $lookup: {
-          from: "owners", // Get the owner data
-          localField: "_id", // Match by owner ID
-          foreignField: "_id", // Foreign field is the _id of the owner
-          as: "owner", // Populate the owner field
+          from: "owners",
+          localField: "_id",
+          foreignField: "_id",
+          as: "owner",
         },
       },
       {
-        $unwind: "$owner", // Unwind the owner to get a single object
+        $unwind: "$owner",
       },
     ]);
 
-    res.send(data); // Send only the owner data
+    // (Optional) Filter owners whose own location is also inside that area
+    const filtered = data.filter((item) => {
+      const loc = turf.point([item.owner.location.longitude, item.owner.location.latitude]);
+      return turf.booleanPointInPolygon(loc, turf.polygon(matchedArea.polygon));
+    });
+
+    res.send(filtered); // or `res.send(filtered)` if filtering by owner location
   } catch (error) {
     console.error(error);
     res.status(500).send({ message: "Error fetching data" });
@@ -1141,5 +1170,36 @@ module.exports.codOrderConfirm = async (req, res) => {
     session.endSession();
     console.error("COD order transaction aborted:", err);
     return res.status(500).json({ status: "Failure", message: err.message });
+  }
+};
+
+module.exports.liveOrderSupport = async (req, res) => {
+  const { order_id } = req.params;
+
+  if (!order_id) {
+    return res.status(400).json({ error: "Order ID is required" });
+  }
+
+  try {
+    // Fetch the order and populate restaurant/owner
+    const order = await LiveOrder.findById(order_id).populate("hotel");
+
+    if (!order) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    const { hotel } = order;
+
+    if (!hotel || (!hotel.number)) {
+      return res.status(404).json({ error: "Support contact not available" });
+    }
+
+    res.json({
+      hotel: hotel.number || null,
+      support: process.env.SUPPORT || null,
+    });
+  } catch (err) {
+    console.error("Error fetching live order support:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 };

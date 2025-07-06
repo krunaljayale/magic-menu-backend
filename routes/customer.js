@@ -25,12 +25,14 @@ const {
   getAddOns,
   codOrderConfirm,
   toggleNotification,
-  checkAlert
+  checkAlert,
+  liveOrderSupport
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
 
-
+//Support
+router.get("/:order_id/live-order/support", authMiddleware, wrapAsync(liveOrderSupport));
 
 // Public Routes (no authentication required)
 router.post("/:user_id/data",authMiddleware,wrapAsync(data));
@@ -71,6 +73,8 @@ router.post("/COD/order-confirm",authMiddleware,wrapAsync(codOrderConfirm)); // 
 
 // Category routes (could be public or protected based on your use case)
 router.get("/:category/suggestion", wrapAsync(categorySuggestion));
-router.get("/:category/restaurant", wrapAsync(categoryRestaurant));
+router.get("/:user_id/:category/restaurant", wrapAsync(categoryRestaurant));
+
+
 
 module.exports = router;
