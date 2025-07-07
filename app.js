@@ -13,10 +13,11 @@ const commonRouter = require("./routes/common");
 const riderRouter = require("./routes/rider");
 const adminRouter = require("./routes/admin");
 
-const { startWeeklySettlementCron } = require("./cron/weeklySettlement");
-
 const app = express();
 app.use(express.json());
+
+const { startWeeklySettlementCron } = require("./cron/weeklySettlement");
+require("./cron/autoStopServing");
 
 // Routers
 app.use("/hotel", hotelRouter);

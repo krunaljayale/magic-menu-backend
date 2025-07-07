@@ -52,7 +52,18 @@ async function generateWeeklySettlements() {
         },
       });
 
-      if (orders.length === 0) continue;
+      // ❌ Rejected Orders
+      const rejectedOrders = await PastOrder.find({
+        hotel: hotel._id,
+        status: "REJECTED",
+        orderedAt: {
+          $gte: weekStart.toDate(),
+          $lte: weekEnd.toDate(),
+        },
+      });
+
+      // ⛔ Skip if no delivered AND no rejected orders
+      if (orders.length === 0 && rejectedOrders.length === 0) continue;
 
       let grossRevenue = 0;
       orders.forEach((order) => {
@@ -61,20 +72,31 @@ async function generateWeeklySettlements() {
         });
       });
 
+      // ❗ Calculate deductions (rejected value)
+      let deductions = 0;
+      rejectedOrders.forEach((order) => {
+        order.items.forEach((item) => {
+          deductions += item.price * item.quantity;
+        });
+      });
+
       const commissionRate = 0.2;
       const gstRate = 0.18;
       const commissionAmount = grossRevenue * commissionRate;
       const taxOnCommission = commissionAmount * gstRate;
-      const netRevenue = grossRevenue - commissionAmount - taxOnCommission;
+      const netRevenue =
+        grossRevenue - commissionAmount - taxOnCommission - deductions;
 
       await RestaurantSettlement.create({
         hotel: hotel._id,
         weekStart: weekStart.toDate(),
         weekEnd: weekEnd.toDate(),
         totalOrders: orders.length,
+        rejectedOrders:rejectedOrders.length,
         grossRevenue: parseFloat(grossRevenue.toFixed(2)),
         commissionAmount: parseFloat(commissionAmount.toFixed(2)),
         taxOnCommission: parseFloat(taxOnCommission.toFixed(2)),
+        deductions:deductions,
         netRevenue: parseFloat(netRevenue.toFixed(2)),
         generatedAt: now.toDate(),
         status: "PENDING",

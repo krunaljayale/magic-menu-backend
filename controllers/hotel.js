@@ -9,6 +9,7 @@ const admin = require("../config/firebaseAdmin");
 const Listing = require("../models/itemListing");
 const PastOrder = require("../models/pastOrder");
 const RestaurantSettlement = require("../models/restaurantSettlement");
+const EmergencyClosure = require("../models/emergencyClosure");
 const moment = require("moment-timezone");
 
 module.exports.getOTP = async (req, res) => {
@@ -245,6 +246,7 @@ module.exports.toggleDuty = async (req, res) => {
     const order = await LiveOrder.findOne({ hotel: id, status: "PENDING" });
     if (order) {
       return res.status(403).json({
+        code: "PENDING_ORDERS",
         message: "Cannot toggle duty while pending orders are in progress.",
       });
     }
@@ -259,8 +261,8 @@ module.exports.toggleDuty = async (req, res) => {
     const isBefore10AM = istNow.hour() < 10;
 
     if (isBefore10AM && !owner.isServing) {
-      // Trying to toggle ON before 10 AM
       return res.status(403).json({
+        code: "TOO_EARLY",
         message:
           "Cannot start serving before 10:00 AM IST as no riders are available.",
       });
@@ -285,6 +287,62 @@ module.exports.toggleDuty = async (req, res) => {
     return res.status(500).json({
       message: "An unexpected error occurred. Please try again later.",
     });
+  }
+};
+
+module.exports.toggleDutyEmergency = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { id } = req.params;
+    const { reason, durationType } = req.body;
+
+    if (!reason || typeof reason !== "string" || !reason.trim()) {
+      return res
+        .status(400)
+        .json({ error: "Reason is required for emergency closure." });
+    }
+
+    const order = await LiveOrder.findOne({ hotel: id, status: "PENDING" });
+    if (order) {
+      return res.status(403).json({
+        code: "PENDING_ORDERS",
+        message: "Cannot toggle duty while pending orders are in progress.",
+      });
+    }
+
+    await session.withTransaction(async () => {
+      // 1. Update serving status
+      await Owner.updateOne(
+        { _id: id },
+        { $set: { isServing: false } },
+        { session }
+      );
+
+      // 2. Log emergency reason
+      await EmergencyClosure.create(
+        [
+          {
+            ownerId: id,
+            reason: reason.trim(),
+            timestamp: new Date(),
+            duration: durationType.trim(),
+          },
+        ],
+        { session }
+      );
+    });
+
+    session.endSession();
+
+    return res.status(200).json({
+      message: "Restaurant set to not serving due to emergency.",
+      success: true,
+    });
+  } catch (error) {
+    console.error("❌ Transaction error in toggleDutyEmergency:", error);
+    session.endSession();
+    return res.status(500).json({ error: "Internal server error." });
   }
 };
 
@@ -540,6 +598,149 @@ module.exports.acceptOrder = async (req, res) => {
   } catch (error) {
     console.error("Accept Order Error:", error);
     res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+module.exports.rejectOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  try {
+    const { order_id, reason } = req.body;
+
+    if (!order_id || !mongoose.Types.ObjectId.isValid(order_id)) {
+      return res.status(400).json({ message: "Invalid order ID." });
+    }
+
+    session.startTransaction();
+
+    const order = await LiveOrder.findById(order_id)
+      .populate("customer")
+      .populate("hotel")
+      .populate("rider")
+      .populate("payment")
+      .populate("items.item")
+      .session(session);
+
+    if (!order) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Order not found." });
+    }
+
+    const nonRejectableStatuses = ["DELIVERED", "REJECTED", "CANCELLED"];
+    if (nonRejectableStatuses.includes(order.status)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(403).json({
+        message: `Cannot reject an order that is already ${order.status}.`,
+      });
+    }
+
+    const transformedItems = await Promise.all(
+      order.items.map(async (orderItem) => {
+        const listing = await Listing.findById(orderItem.item);
+        return {
+          listingId: listing._id,
+          name: listing.name,
+          price: listing.discountedPrice,
+          quantity: orderItem.quantity,
+        };
+      })
+    );
+
+    const pastOrder = new PastOrder({
+      ticketNumber: order.ticketNumber,
+      orderOtp: order.orderOtp,
+      reason: reason,
+      status: "REJECTED",
+      customer: order.customer._id,
+      hotel: order.hotel._id,
+      rider: order.rider || null,
+      payment: order.payment || null,
+      deliveryAddress: order.deliveryAddress || undefined,
+      items: transformedItems,
+      remarks: order.remarks,
+      orderedAt: order.orderedAt,
+      servedAt: order.servedAt || null,
+      arrivedAt: order.arrivedAt || null,
+      deliveredAt: order.deliveredAt || null,
+      totalPrice: order.totalPrice,
+    });
+
+    await pastOrder.save({ session });
+    await LiveOrder.findByIdAndDelete(order_id, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // ✅ FCM Notification to customer
+    const customer = order.customer;
+
+    if (customer?.fcmToken && customer.notificationsEnabled !== false) {
+      const tokens = Array.isArray(customer.fcmToken)
+        ? customer.fcmToken
+        : [customer.fcmToken];
+
+      if (tokens.length > 0) {
+        const message = {
+          tokens,
+          android: {
+            notification: {
+              title: "❌ Order Rejected",
+              body: `Your order was rejected by the restaurant.\nReason: ${reason}`,
+              sound: "magicmenu_zing_enhanced",
+              channelId: "custom-sound-channel",
+            },
+          },
+          data: {
+            type: "ORDER_REJECTED",
+            title: "❌ Order Rejected",
+            body: `Your order was rejected by the restaurant.\nReason: ${reason}`,
+          },
+        };
+
+        try {
+          if (typeof admin.messaging().sendMulticast === "function") {
+            await admin.messaging().sendMulticast(message);
+          } else {
+            await Promise.all(
+              tokens.map((token) =>
+                admin
+                  .messaging()
+                  .send({
+                    token,
+                    android: message.android,
+                    data: message.data,
+                  })
+                  .catch((err) => {
+                    if (
+                      err.message?.includes("Requested entity was not found.")
+                    ) {
+                      // Silently ignore
+                      return;
+                    }
+                    console.warn("⚠️ FCM send error:", err.message);
+                  })
+              )
+            );
+          }
+        } catch (error) {
+          console.warn("⚠️ General FCM error:", error?.message);
+        }
+      }
+    }
+
+    return res.status(200).json({
+      message: "Order rejected and archived successfully.",
+      pastOrderId: pastOrder._id,
+    });
+  } catch (err) {
+    console.error("❌ Error in rejectOrder API:", err);
+    await session.abortTransaction();
+    session.endSession();
+    return res.status(500).json({
+      message: "An unexpected error occurred while rejecting the order.",
+    });
   }
 };
 
@@ -1384,7 +1585,6 @@ module.exports.getTopSellingItems = async (req, res) => {
       {
         $match: {
           hotel: hotelObjectId,
-          status: "DELIVERED",
           deliveredAt: { $gte: startOfToday, $lte: endOfToday },
         },
       },
@@ -1451,6 +1651,7 @@ module.exports.getTodayOrders = async (req, res) => {
     const formattedData = data.map((order) => ({
       _id: order._id,
       ticketNumber: order.ticketNumber,
+      reason: order.reason,
       orderOtp: order.orderOtp,
       status: order.status,
       customer: order.customer,
@@ -1493,6 +1694,7 @@ module.exports.getYesterdayOrders = async (req, res) => {
     const formattedData = data.map((order) => ({
       _id: order._id,
       ticketNumber: order.ticketNumber,
+      reason: order.reason,
       orderOtp: order.orderOtp,
       status: order.status,
       customer: order.customer,
@@ -1546,6 +1748,7 @@ module.exports.getRunningWeekOrders = async (req, res) => {
     const formattedData = data.map((order) => ({
       _id: order._id,
       ticketNumber: order.ticketNumber,
+      reason: order.reason,
       orderOtp: order.orderOtp,
       status: order.status,
       customer: order.customer,
@@ -1593,6 +1796,7 @@ module.exports.getCustomOrders = async (req, res) => {
     const formattedData = data.map((order) => ({
       _id: order._id,
       ticketNumber: order.ticketNumber,
+      reason: order.reason,
       orderOtp: order.orderOtp,
       status: order.status,
       customer: order.customer,
@@ -1634,44 +1838,65 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
     // ✅ Calculate Wednesday 11:59:59 PM (end of the 7-day window)
     const weekEnd = weekStart.clone().add(6, "days").endOf("day");
 
-    // ✅ Fetch all delivered orders in that window
-    const orders = await PastOrder.find({
+    // ✅ Separate delivered and rejected orders
+    const allOrders = await PastOrder.find({
       hotel: hotelObjectId,
-      status: "DELIVERED",
       orderedAt: {
         $gte: weekStart.toDate(),
         $lte: weekEnd.toDate(),
       },
     });
 
-    // ✅ Calculate gross revenue
+    const deliveredOrders = allOrders.filter(
+      (order) => order.status === "DELIVERED"
+    );
+    const rejectedOrders = allOrders.filter(
+      (order) => order.status === "REJECTED"
+    );
+
+    // ✅ Calculate gross revenue only from delivered orders
     let grossRevenue = 0;
-    orders.forEach((order) => {
+    deliveredOrders.forEach((order) => {
       order.items.forEach((item) => {
         grossRevenue += item.price * item.quantity;
       });
     });
 
-    const totalOrders = orders.length;
+    // ✅ Calculate rejected total amount
+    let rejectedAmount = 0;
+    rejectedOrders.forEach((order) => {
+      order.items.forEach((item) => {
+        rejectedAmount += item.price * item.quantity;
+      });
+    });
 
-    // ✅ Calculate commission and tax
-    const commissionRate = 0.2; // 20%
-    const gstRate = 0.18; // 18% on commission
+    const totalOrders = deliveredOrders.length;
+
+    const commissionRate = 0.2;
+    const gstRate = 0.18;
 
     const commissionAmount = parseFloat(
       (grossRevenue * commissionRate).toFixed(2)
     );
     const taxOnCommission = parseFloat((commissionAmount * gstRate).toFixed(2));
     const netRevenue = parseFloat(
-      (grossRevenue - commissionAmount - taxOnCommission).toFixed(2)
+      (
+        grossRevenue -
+        commissionAmount -
+        taxOnCommission -
+        rejectedAmount
+      ).toFixed(2)
     );
 
+    // ✅ Return both gross revenue and rejected deduction
     return res.status(200).json({
       restaurantId: user_id,
       weekStart: weekStart.toISOString(),
       weekEnd: weekEnd.toISOString(),
       totalOrders,
       grossRevenue: parseFloat(grossRevenue.toFixed(2)),
+      rejectedOrders: rejectedOrders.length,
+      rejectedAmount: parseFloat(rejectedAmount.toFixed(2)),
       commissionRate: 20,
       commissionAmount,
       taxOnCommission,

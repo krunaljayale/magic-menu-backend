@@ -14,6 +14,9 @@ const restaurantSettlementSchema = new Schema(
     taxOnCommission: { type: Number, required: true },
     netRevenue: { type: Number, required: true },
 
+    rejectedOrders: { type: Number },
+    deductions: { type: Number },
+
     generatedAt: { type: Date, default: Date.now },
     status: {
       type: String,
