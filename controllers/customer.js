@@ -523,7 +523,10 @@ module.exports.categoryRestaurant = async (req, res) => {
 
     // (Optional) Filter owners whose own location is also inside that area
     const filtered = data.filter((item) => {
-      const loc = turf.point([item.owner.location.longitude, item.owner.location.latitude]);
+      const loc = turf.point([
+        item.owner.location.longitude,
+        item.owner.location.latitude,
+      ]);
       return turf.booleanPointInPolygon(loc, turf.polygon(matchedArea.polygon));
     });
 
@@ -972,83 +975,6 @@ module.exports.paymentConfirm = async (req, res) => {
     };
     const [createdOrder] = await LiveOrder.create([orderData], { session });
 
-    // 3. Gather tokens
-    // const riders = await Rider.find({ onDuty: true, isAvailable: true }, null, {
-    //   session,
-    // });
-    // const tokenEntries = [];
-    // riders.forEach((r) =>
-    //   (r.fcmToken || []).forEach((t) =>
-    //     tokenEntries.push({ riderId: r._id, token: t })
-    //   )
-    // );
-    // const allTokens = tokenEntries.map((e) => e.token);
-
-    // let sendRes = { successCount: 0, failureCount: 0, responses: [] };
-    // if (allTokens.length) {
-    //   const payload = {
-    //     // notification: {
-    //     //   // imageUrl: 'https://res.cloudinary.com/dcgskimn8/image/upload/v1748271323/icon2_ksz1me.png',
-    //     // },
-    //     android: {
-    //       notification: {
-    //         sound: "magicmenu_zing_enhanced",
-    //         channelId: "custom-sound-channel",
-    //         title: "🚨 Incoming Order Request!",
-    //         body: "Someone’s hungry and counting on you. Tap to accept.⚡️",
-    //       },
-    //     },
-    //   };
-
-    //   if (typeof admin.messaging().sendMulticast === "function") {
-    //     sendRes = await admin
-    //       .messaging()
-    //       .sendMulticast({ ...payload, tokens: allTokens });
-    //   } else {
-    //     // Fallback: send one-by-one with try/catch
-    //     const results = await Promise.all(
-    //       allTokens.map(async (token) => {
-    //         try {
-    //           await admin.messaging().send({ ...payload, token });
-    //           return { success: true };
-    //         } catch (error) {
-    //           return { success: false, error };
-    //         }
-    //       })
-    //     );
-    //     sendRes = {
-    //       successCount: results.filter((r) => r.success).length,
-    //       failureCount: results.filter((r) => !r.success).length,
-    //       responses: results,
-    //     };
-    //   }
-
-    //   // 4. Clean invalid tokens
-    //   const invalidMap = {};
-    //   sendRes.responses.forEach((resp, idx) => {
-    //     if (
-    //       !resp.success &&
-    //       resp.error?.code &&
-    //       [
-    //         "messaging/invalid-registration-token",
-    //         "messaging/registration-token-not-registered",
-    //       ].includes(resp.error.code)
-    //     ) {
-    //       const { riderId, token } = tokenEntries[idx];
-    //       invalidMap[riderId] = invalidMap[riderId] || [];
-    //       invalidMap[riderId].push(token);
-    //     }
-    //   });
-    //   await Promise.all(
-    //     Object.entries(invalidMap).map(([rId, tokens]) =>
-    //       Rider.findByIdAndUpdate(
-    //         rId,
-    //         { $pull: { fcmToken: { $in: tokens } } },
-    //         { session }
-    //       )
-    //     )
-    //   );
-    // }
 
     await session.commitTransaction();
     session.endSession();
@@ -1160,6 +1086,59 @@ module.exports.codOrderConfirm = async (req, res) => {
 
     io.to(`restaurant-${orderData.hotel}`).emit("orderRefresh");
 
+    const hotel = await Owner.findById(orderItems[0].restaurantId);
+
+    // ✅ Notification payload
+    const message = {
+      tokens: hotel.fcmToken,
+      // notification: {},
+      android: {
+        notification: {
+          title: "🚨 Incoming Order Request!",
+          body: "Someone’s hungry and counting on you. Tap to accept.⚡️",
+          sound: "magicmenu_zing_enhanced",
+          channelId: "custom-sound-channel",
+        },
+      },
+      data: {
+        type: "NEW_ORDER",
+        title: "🚨 Incoming Order Request!",
+        body: "Someone’s hungry and counting on you. Tap to accept.⚡️",
+      },
+    };
+
+    // ✅ Send multicast if supported (recommended)
+    if (typeof admin.messaging().sendMulticast === "function") {
+      const response = await admin.messaging().sendMulticast(message);
+
+      return res.status(200).json({
+        message: "Notification sent successfully",
+        successCount: response.successCount,
+        failureCount: response.failureCount,
+        responses: response.responses.map((r, i) => ({
+          token: hotel.fcmToken[i],
+          success: r.success,
+          error: r.error?.message || null,
+        })),
+      });
+    }
+
+    // ✅ Fallback: send individually
+    const results = await Promise.all(
+      hotel.fcmToken.map(async (token) => {
+        try {
+          await admin.messaging().send({
+            token,
+            android: message.android,
+            data: message.data,
+          });
+          return { token, success: true };
+        } catch (err) {
+          return { token, success: false, error: err.message };
+        }
+      })
+    );
+
     return res.status(200).json({
       status: "SUCCESS",
       id: createdOrder._id,
@@ -1190,7 +1169,7 @@ module.exports.liveOrderSupport = async (req, res) => {
 
     const { hotel } = order;
 
-    if (!hotel || (!hotel.number)) {
+    if (!hotel || !hotel.number) {
       return res.status(404).json({ error: "Support contact not available" });
     }
 

@@ -964,6 +964,35 @@ module.exports.almostReadyOrder = async (req, res) => {
   }
 };
 
+module.exports.registerFCM = async (req, res) => {
+  const { id } = req.params;
+  const { token } = req.body;
+
+  try {
+    const owner = await Owner.findById(id);
+
+    if (!owner) {
+      return res.status(404).json({ message: "owner not found" });
+    }
+
+    // Ensure fcmToken is initialized
+    if (!Array.isArray(owner.fcmToken)) {
+      owner.fcmToken = [];
+    }
+
+    // Add token only if it doesn't already exist
+    if (!owner.fcmToken.includes(token)) {
+      owner.fcmToken.push(token);
+      await owner.save();
+    }
+
+    return res.status(200).json({ message: "FCM Token saved successfully" });
+  } catch (error) {
+    console.error("Error saving FCM token:", error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
 // Menu routes controllers
 module.exports.getRestaurantData = async (req, res) => {
   try {

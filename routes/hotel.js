@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const {homeRoute, loginRoute, getOTP, registerData, completeProfile, authToken, getReadyOrders, getPickedUpOrders, getNewOrders, acceptOrder, readyOrder, almostReadyOrder, newOrder, toggleDuty, getRestaurantData, getRestaurantCategories, getCategoriesItems, changeListingStockStatus, addListing, changeListingRecommendStatus, addCategory, updateCategory, deleteCategory, updateListing,  getAddOnCategoriesItems, changeCategoryStatus, getRestaurantProfile, updateRestaurantProfile, getBusinessReport, getOrderSummary, getTopSellingItems, getTodayOrders, getYesterdayOrders, getCustomOrders, getWeeklyRevenueReport, getRunningWeekOrders, getWeeklyPayoutsReport, rejectOrder, toggleDutyEmergency } = require('../controllers/hotel');
+const {homeRoute, loginRoute, getOTP, registerData, completeProfile, authToken, getReadyOrders, getPickedUpOrders, getNewOrders, acceptOrder, readyOrder, almostReadyOrder, newOrder, toggleDuty, getRestaurantData, getRestaurantCategories, getCategoriesItems, changeListingStockStatus, addListing, changeListingRecommendStatus, addCategory, updateCategory, deleteCategory, updateListing,  getAddOnCategoriesItems, changeCategoryStatus, getRestaurantProfile, updateRestaurantProfile, getBusinessReport, getOrderSummary, getTopSellingItems, getTodayOrders, getYesterdayOrders, getCustomOrders, getWeeklyRevenueReport, getRunningWeekOrders, getWeeklyPayoutsReport, rejectOrder, toggleDutyEmergency, registerFCM } = require('../controllers/hotel');
 const wrapAsync = require('../utils/wrapAsync');
 const authMiddleware = require('../utils/jwtAuth');
 
@@ -21,6 +21,7 @@ router.post('/accept-order',authMiddleware, wrapAsync(acceptOrder));
 router.post('/reject-order',authMiddleware, wrapAsync(rejectOrder));
 router.post('/ready-order',authMiddleware, wrapAsync(readyOrder));
 router.post('/almost-ready-order',authMiddleware, wrapAsync(almostReadyOrder));
+router.post('/:id/fcm-token',authMiddleware,wrapAsync(registerFCM));
 
 //Menu routes
 router.get('/:user_id/get-restaurant-data',authMiddleware, wrapAsync(getRestaurantData));
