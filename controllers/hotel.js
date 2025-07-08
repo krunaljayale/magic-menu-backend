@@ -9,6 +9,7 @@ const admin = require("../config/firebaseAdmin");
 const Listing = require("../models/itemListing");
 const PastOrder = require("../models/pastOrder");
 const RestaurantSettlement = require("../models/restaurantSettlement");
+const EmailOtp = require("../models/emailOTP");
 const EmergencyClosure = require("../models/emergencyClosure");
 const moment = require("moment-timezone");
 
@@ -26,16 +27,21 @@ module.exports.getOTP = async (req, res) => {
     });
   }
 
-  const otp = Math.floor(100000 + Math.random() * 900000);
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
   const emailResponse = await sendEmail(name, email, otp);
-  if (emailResponse.status === 200) {
-    return res.status(200).json({
-      status: "Success",
-      message: "OTP created successfully and email sent",
-      otp: otp, // Include OTP in the response
+  if (emailResponse.status !== 200) {
+    return res.status(500).json({
+      status: "Error",
+      message: "Failed to send OTP email",
     });
   } else {
+    // 4. Only after successful email send, store OTP in DB
+    await EmailOtp.findOneAndUpdate(
+      { email },
+      { number, otp:otp, createdAt: new Date() },
+      { upsert: true }
+    );
     return res.status(500).json({
       status: "Error",
       message: "OTP created, but failed to send email",
@@ -44,16 +50,36 @@ module.exports.getOTP = async (req, res) => {
 };
 
 module.exports.registerData = async (req, res) => {
-  const { name, number, email, pass } = req.body;
+  const { name, number, email, pass, otp } = req.body;
 
-  // Check for missing fields
-  if (!name || !number || !email || !pass) {
+  // 1. Check for missing fields
+  if (!name || !number || !email || !pass || !otp) {
     return res
       .status(400)
       .json({ status: "Error", message: "Missing required fields" });
   }
 
   try {
+    // 2. Fetch OTP record
+    const otpRecord = await EmailOtp.findOne({ email });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        status: "Error",
+        message: "OTP expired or not requested",
+      });
+    }
+
+    if (otpRecord.otp !== otp) {
+      return res.status(400).json({
+        status: "Error",
+        message: "Invalid OTP",
+      });
+    }
+
+    // ✅ OTP verified, now delete the OTP record
+    await EmailOtp.deleteOne({ email });
+
     // Check if the email or phone number is already in use
     const existingUser = await Owner.findOne({
       $or: [{ email: email }, { number: number }],
