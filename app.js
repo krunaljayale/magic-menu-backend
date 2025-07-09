@@ -132,13 +132,19 @@ const start = async () => {
 
     // ✅ Create HTTP server and pass to socket
     const server = http.createServer(app);
-    socketManager.init(server); // 👈 Attach WebSocket
+    try {
+      socketManager.init(server);
+    } catch (err) {
+      console.error("Socket init failed:", err);
+    }
 
     // ✅ Listen with HTTP server (not app.listen)
     const PORT = process.env.PORT || 3000;
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on PORT ${PORT}`);
     });
+    server.keepAliveTimeout = 120 * 1000; // 2 minutes
+    server.headersTimeout = 130 * 1000;
   } catch (error) {
     console.error("❌ Server Startup Error:", error);
   }
