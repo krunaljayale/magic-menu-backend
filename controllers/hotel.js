@@ -39,12 +39,13 @@ module.exports.getOTP = async (req, res) => {
     // 4. Only after successful email send, store OTP in DB
     await EmailOtp.findOneAndUpdate(
       { email },
-      { number, otp:otp, createdAt: new Date() },
+      { number, otp: otp, createdAt: new Date() },
       { upsert: true }
     );
-    return res.status(500).json({
-      status: "Error",
-      message: "OTP created, but failed to send email",
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "OTP created and sent to email",
     });
   }
 };
