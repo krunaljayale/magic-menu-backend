@@ -5,7 +5,7 @@ const pastOrderSchema = new Schema(
   {
     ticketNumber: { type: Number, required: true },
     orderOtp: { type: Number, required: true },
-    reason:{type:String},
+    reason: { type: String },
     status: {
       type: String,
       enum: ["DELIVERED", "CANCELLED", "REJECTED"],
@@ -25,10 +25,11 @@ const pastOrderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Rider",
     },
+    riderMetaData: { type: Schema.Types.ObjectId, ref: "RiderMetaData" },
     payment: { type: Schema.Types.ObjectId, ref: "PaymentLog", required: true },
     deliveryAddress: {
       title: { type: String },
-      latitude: { type: Number},
+      latitude: { type: Number },
       longitude: { type: Number },
       houseNo: { type: Number },
       buildingNo: { type: String },

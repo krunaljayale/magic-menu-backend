@@ -27,6 +27,7 @@ const liveOrderSchema = new Schema(
     customer: { type: Schema.Types.ObjectId, ref: "Customer", required: true },
     hotel: { type: Schema.Types.ObjectId, ref: "Owner", required: true },
     rider: { type: Schema.Types.ObjectId, ref: "Rider" },
+    riderMetaData: { type: Schema.Types.ObjectId, ref: "RiderMetaData" },
     payment: { type: Schema.Types.ObjectId, ref: "PaymentLog", required: true },
     locationIndex: { type: Number, required: true },
     items: [

@@ -3,6 +3,8 @@ const LiveOrder = require("../models/liveOrder");
 const Customer = require("../models/customer");
 const Owner = require("../models/owner");
 const Listing = require("../models/itemListing");
+const RiderMetaData = require("../models/riderMetaData");
+const PaymentLog = require("../models/paymentLog");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendEmail } = require("../utils/emailSender");
@@ -158,7 +160,7 @@ module.exports.auth = async (req, res) => {
     }
 
     // Fetch rider data excluding password using select
-    const data = await Rider.findById(id).select("-password").lean();
+    const data = await Rider.findById(id).select("name number email onDuty isAvailable servingOrder status").lean();
 
     // Check if rider exists
     if (!data) {
@@ -241,7 +243,7 @@ module.exports.newOrder = async (req, res) => {
       restaurantStatus: { $in: ["ALMOST_READY", "READY"] },
       status: "PREPARING",
     })
-      .select("hotel customer locationIndex ticketNumber") // ✅ added ticketNumber
+      .select("hotel customer locationIndex ticketNumber")
       .lean();
 
     if (liveOrders.length === 0) {
@@ -258,6 +260,8 @@ module.exports.newOrder = async (req, res) => {
         let hotelTravelTime = 0;
         let customerDistance = 0;
 
+        let hotelCoords = null;
+
         try {
           const hotel = await Owner.findById(order.hotel)
             .select("hotel location")
@@ -267,12 +271,17 @@ module.exports.newOrder = async (req, res) => {
             hotelName = hotel.hotel;
             hotelAddress = hotel.location.address || "N/A";
 
+            hotelCoords = {
+              latitude: hotel.location.latitude,
+              longitude: hotel.location.longitude,
+            };
+
             hotelDistance = Math.round(
               calculateDistance(
                 rider_latitude,
                 rider_longitude,
-                hotel.location.latitude,
-                hotel.location.longitude
+                hotelCoords.latitude,
+                hotelCoords.longitude
               )
             );
 
@@ -293,11 +302,11 @@ module.exports.newOrder = async (req, res) => {
           if (Array.isArray(customer?.location)) {
             const coords = customer.location[order.locationIndex];
 
-            if (coords) {
+            if (coords && hotelCoords) {
               customerDistance = Math.round(
                 calculateDistance(
-                  rider_latitude,
-                  rider_longitude,
+                  hotelCoords.latitude,
+                  hotelCoords.longitude,
                   coords.latitude,
                   coords.longitude
                 )
@@ -313,12 +322,12 @@ module.exports.newOrder = async (req, res) => {
 
         return {
           _id: order._id,
-          ticketNumber: order.ticketNumber, // ✅ included here
+          ticketNumber: order.ticketNumber,
           hotelName,
           hotelAddress,
-          hotelDistance,
+          hotelDistance, // rider → hotel
           hotelTravelTime,
-          customerDistance,
+          customerDistance, // ✅ hotel → customer (updated)
           timer: 0,
         };
       })
@@ -580,14 +589,17 @@ module.exports.getCompleteOrderData = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // 1️⃣ Find the live order, populate items + payment
     const liveOrder = await LiveOrder.findById(id)
-      .populate("items.item", "name") // Only fetch 'name' field of item
+      .populate("items.item", "name")
+      .populate("payment") // fetch payment log
       .exec();
 
     if (!liveOrder) {
       return res.status(404).json({ message: "Order not found" });
     }
 
+    // 2️⃣ Format order items
     const orderItems = liveOrder.items.map((orderItem) => ({
       name: orderItem.item?.name || "Unknown Item",
       quantity: orderItem.quantity,
@@ -598,6 +610,7 @@ module.exports.getCompleteOrderData = async (req, res) => {
       orderItems,
     };
 
+    // 3️⃣ Get customer and address
     const customer = await Customer.findById(liveOrder.customer).select(
       "name number location"
     );
@@ -606,7 +619,6 @@ module.exports.getCompleteOrderData = async (req, res) => {
     }
 
     const index = liveOrder.locationIndex ?? 0;
-
     const location = customer.location?.[index];
 
     if (!location || location.houseNo == null || location.buildingNo == null) {
@@ -619,46 +631,431 @@ module.exports.getCompleteOrderData = async (req, res) => {
       customerAddress: `House No. ${location.houseNo}, ${location.buildingNo}, ${location.landmark}`,
     };
 
-    return res.status(200).json({ orderData, customerData });
+    // 4️⃣ Handle payment status
+    const paymentStatus = liveOrder.payment?.status || "UNKNOWN";
+    const amountToCollect =
+      paymentStatus === "NOT_COLLECTED" ? liveOrder.payment?.amount : null;
+
+    return res.status(200).json({
+      orderData,
+      customerData,
+      paymentStatus,
+      ...(amountToCollect !== null && { amountToCollect }),
+    });
   } catch (error) {
     console.error("Error in getCompleteOrderData:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// Delivered Controller
+module.exports.getCollectionReport = async (req, res) => {
+  const { user_id } = req.params;
+
+  try {
+    // Get all past COD orders served by this rider where payment is NOT settled
+    const orders = await PastOrder.find({ rider: user_id })
+      .populate({
+        path: "payment",
+        match: { mode: "COD", isSettled: false },
+        select: "amount",
+      });
+
+    const unsettledCODOrders = orders.filter(order => order.payment);
+
+    const amountToDeposit = unsettledCODOrders.reduce((total, order) => {
+      return total + (order.payment.amount || 0);
+    }, 0);
+
+    // Get deposit amount from Rider schema
+    const rider = await Rider.findById(user_id).select("depositAmount");
+    if (!rider) {
+      return res.status(404).json({ message: "Rider not found" });
+    }
+
+    return res.status(200).json({
+      amountToDeposit,
+      depositAmount: rider.depositAmount,
+    });
+  } catch (error) {
+    console.error("Error fetching collection report:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+// Delivery Controller
+
+module.exports.acceptOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { user_id } = req.params;
+    const {
+      order_id,
+      rider_latitude,
+      rider_longitude,
+      hotelDistance,
+      customerDistance,
+    } = req.body;
+
+    if (
+      !user_id ||
+      !order_id ||
+      typeof rider_latitude !== "number" ||
+      typeof rider_longitude !== "number" ||
+      typeof hotelDistance !== "number" ||
+      typeof customerDistance !== "number"
+    ) {
+      return res.status(400).json({ message: "Missing or invalid parameters" });
+    }
+
+    // Step 1️⃣ Try to atomically claim or reclaim the order
+    const updatedOrder = await LiveOrder.findOneAndUpdate(
+      {
+        _id: order_id,
+        $or: [
+          { rider: { $exists: false } }, // no one claimed yet
+          { rider: user_id }, // same rider reclaiming
+        ],
+      },
+      {
+        $set: {
+          status: "ACCEPTED",
+          rider: user_id,
+        },
+      },
+      { new: true, session }
+    );
+
+    // Step 2️⃣ Reject if another rider has already claimed
+    if (!updatedOrder) {
+      await session.abortTransaction();
+      return res
+        .status(403)
+        .json({ message: "Order already accepted by another rider" });
+    }
+
+    // Step 3️⃣ If riderMetaData already exists (from earlier reclaim), skip creating new one
+    if (!updatedOrder.riderMetaData) {
+      const riderMeta = new RiderMetaData({
+        riderId: user_id,
+        acceptedAtLocation: {
+          latitude: rider_latitude,
+          longitude: rider_longitude,
+        },
+        acceptedAtTime: Date.now(),
+        restaurantDistanceAtAccept: hotelDistance,
+        customerDistanceAtAccept: customerDistance,
+      });
+
+      await riderMeta.save({ session });
+
+      updatedOrder.riderMetaData = riderMeta._id;
+      await updatedOrder.save({ session });
+    }
+
+    // Step 4️⃣ Update rider status
+    await Rider.findByIdAndUpdate(
+      user_id,
+      {
+        isAvailable: false,
+        servingOrder: order_id,
+        status: "ACCEPTED",
+      },
+      { session }
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json({ message: "Order accepted successfully" });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+module.exports.reachedPickup = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    const { imageURL } = req.body;
+
+    if (!user_id || !imageURL) {
+      return res.status(400).json({ message: "Missing user_id or imageURL" });
+    }
+
+    // 1️⃣ Update metadata
+    const updatedMeta = await RiderMetaData.findOneAndUpdate(
+      { riderId: user_id },
+      {
+        selfieAtRestaurant: imageURL,
+        reachedRestaurantAt: Date.now(),
+      },
+      { new: true }
+    );
+
+    if (!updatedMeta) {
+      return res.status(404).json({ message: "Rider metadata not found" });
+    }
+
+    // 2️⃣ Update rider status
+    await Rider.findByIdAndUpdate(user_id, {
+      status: "REACHED",
+    });
+
+    return res
+      .status(200)
+      .json({ message: "Rider marked as reached at restaurant" });
+  } catch (error) {
+    console.error("Error in reachedPickup:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+module.exports.orderPickedup = async (req, res) => {
+  const { user_id } = req.params;
+  const session = await mongoose.startSession();
+
+  try {
+    session.startTransaction();
+
+    // 🔍 Find the live order for this rider (before updating anything)
+    const liveOrder = await LiveOrder.findOne({ rider: user_id })
+      .populate("customer")
+      .session(session);
+
+    if (!liveOrder || !liveOrder.customer) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Order or customer not found" });
+    }
+
+    // ⛔ Check restaurantStatus === "READY"
+    if (liveOrder.restaurantStatus !== "READY") {
+      await session.abortTransaction();
+      return res.status(400).json({
+        code: "DENIED",
+        message: "⛔ Can't pick up: Order not marked as READY",
+      });
+    }
+
+    // ✅ Update RiderMetaData
+    const updatedMeta = await RiderMetaData.findOneAndUpdate(
+      { riderId: user_id },
+      { pickupConfirmedAt: Date.now() },
+      { new: true, session }
+    );
+    if (!updatedMeta) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Rider metadata not found" });
+    }
+
+    // ✅ Update rider status
+    await Rider.findByIdAndUpdate(user_id, { status: "PICKEDUP" }, { session });
+
+    // ✅ Update LiveOrder status
+    liveOrder.status = "PICKEDUP";
+    await liveOrder.save({ session });
+
+    const customer = liveOrder.customer;
+    const tokens = Array.isArray(customer.fcmToken) ? customer.fcmToken : [];
+
+    // ✅ Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    // 📣 Prepare FCM (outside transaction)
+    if (!tokens.length || !customer.notificationsEnabled) {
+      return res.status(200).json({
+        message: "Order marked as picked up (no notifications sent)",
+      });
+    }
+
+    const message = {
+      tokens,
+      android: {
+        notification: {
+          title: "🍽️ Your food is on the way!",
+          body: "Our delivery partner has picked up your order and is heading to you.",
+          sound: "magicmenu_zing_enhanced",
+          channelId: "custom-sound-channel",
+        },
+      },
+      data: {
+        type: "ORDER_PICKED_UP",
+        title: "🍽️ Your food is on the way!",
+        body: "Our delivery partner has picked up your order and is heading to you.",
+      },
+    };
+
+    // 🚀 Send FCM
+    const failedTokens = [];
+
+    if (typeof admin.messaging().sendMulticast === "function") {
+      const response = await admin.messaging().sendMulticast(message);
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          failedTokens.push(tokens[idx]);
+        }
+      });
+    } else {
+      await Promise.all(
+        tokens.map((token) =>
+          admin
+            .messaging()
+            .send({ token, android: message.android, data: message.data })
+            .catch(() => failedTokens.push(token))
+        )
+      );
+    }
+
+    // 🧹 Clean up invalid tokens
+    if (failedTokens.length > 0) {
+      const filtered = tokens.filter((t) => !failedTokens.includes(t));
+      await Customer.findByIdAndUpdate(customer._id, { fcmToken: filtered });
+    }
+
+    return res.status(200).json({
+      message: "Rider marked order as picked up from restaurant",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Error in orderPickedup:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+module.exports.orderReachedDrop = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { user_id } = req.params;
+
+    // 1️⃣ Update RiderMetaData
+    const updatedMeta = await RiderMetaData.findOneAndUpdate(
+      { riderId: user_id },
+      { dropAt: Date.now() },
+      { new: true, session }
+    );
+
+    if (!updatedMeta) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Rider metadata not found" });
+    }
+
+    // 2️⃣ Update rider status
+    await Rider.findByIdAndUpdate(user_id, { status: "DROP" }, { session });
+
+    // 3️⃣ Find live order + customer
+    const liveOrder = await LiveOrder.findOne({ rider: user_id })
+      .populate("customer")
+      .session(session);
+
+    if (!liveOrder || !liveOrder.customer) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Order or customer not found" });
+    }
+
+    liveOrder.status = "DROP";
+    await liveOrder.save({ session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // 🟡 FCM (run *outside* transaction)
+    const customer = liveOrder.customer;
+    const tokens = Array.isArray(customer.fcmToken) ? customer.fcmToken : [];
+
+    if (tokens.length && customer.notificationsEnabled) {
+      const message = {
+        tokens,
+        android: {
+          notification: {
+            title: "🏠 Your order has arrived!",
+            body: "Your food has arrived! Please collect it at your door.",
+            sound: "magicmenu_zing_enhanced",
+            channelId: "custom-sound-channel",
+          },
+        },
+        data: {
+          type: "ORDER_DELIVERED",
+          title: "🏠 Your order has arrived!",
+          body: "Your food has arrived! Please collect it at your door.",
+        },
+      };
+
+      try {
+        if (typeof admin.messaging().sendMulticast === "function") {
+          await admin.messaging().sendMulticast(message);
+        } else {
+          await Promise.all(
+            tokens.map((token) =>
+              admin.messaging().send({
+                token,
+                android: message.android,
+                data: message.data,
+              })
+            )
+          );
+        }
+      } catch (fcmError) {
+        console.warn("FCM error (ignored):", fcmError.message);
+        // Not blocking, just log
+      }
+    }
+
+    return res.status(200).json({
+      message: "Rider marked order as reached drop location",
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("Error in orderReachedDrop:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 module.exports.completeOrder = async (req, res) => {
   const { order_id } = req.params;
   const { rider_id, otp } = req.body;
 
+  const session = await mongoose.startSession();
+
   try {
-    // 1. Find the live order
-    const liveOrder = await LiveOrder.findById(order_id);
+    session.startTransaction();
+
+    // 1️⃣ Find the live order
+    const liveOrder = await LiveOrder.findById(order_id).session(session);
     if (!liveOrder) {
+      await session.abortTransaction();
       return res.status(404).json({ message: "Live order not found" });
     }
 
-    // 2. OTP validation
+    // 2️⃣ OTP validation
     if (parseInt(liveOrder.orderOtp) !== parseInt(otp)) {
+      await session.abortTransaction();
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    // 3. Fetch customer and get delivery address snapshot
-    const customer = await Customer.findById(liveOrder.customer);
+    // 3️⃣ Fetch customer & delivery address
+    const customer = await Customer.findById(liveOrder.customer).session(session);
     if (!customer) {
+      await session.abortTransaction();
       return res.status(404).json({ message: "Customer not found" });
     }
 
     const deliveryLocation = customer.location[liveOrder.locationIndex];
     if (!deliveryLocation) {
+      await session.abortTransaction();
       return res.status(400).json({ message: "Invalid location index" });
     }
 
-    // 4. Build denormalized items
+    // 4️⃣ Denormalize order items
     const transformedItems = await Promise.all(
       liveOrder.items.map(async (orderItem) => {
-        const listing = await Listing.findById(orderItem.item);
+        const listing = await Listing.findById(orderItem.item).session(session);
         return {
           listingId: listing._id,
           name: listing.name,
@@ -668,11 +1065,11 @@ module.exports.completeOrder = async (req, res) => {
       })
     );
 
-    // 5. Update status and deliveredAt
+    // 5️⃣ Update order status
     liveOrder.status = "DELIVERED";
     liveOrder.deliveredAt = new Date();
 
-    // 6. Construct past order data
+    // 6️⃣ Build past order object
     const pastOrderData = {
       ticketNumber: liveOrder.ticketNumber,
       orderOtp: liveOrder.orderOtp,
@@ -680,6 +1077,7 @@ module.exports.completeOrder = async (req, res) => {
       customer: liveOrder.customer,
       hotel: liveOrder.hotel,
       rider: liveOrder.rider,
+      riderMetaData: liveOrder.riderMetaData,
       deliveryAddress: deliveryLocation,
       items: transformedItems,
       remarks: liveOrder.remarks,
@@ -688,25 +1086,51 @@ module.exports.completeOrder = async (req, res) => {
       arrivedAt: liveOrder.arrivedAt,
       deliveredAt: liveOrder.deliveredAt,
       totalPrice: liveOrder.totalPrice,
-      payment: liveOrder.payment, // ✅ New addition
+      payment: liveOrder.payment,
     };
 
-    // 7. Save to PastOrder collection
-    await new PastOrder(pastOrderData).save();
+    // 7️⃣ Save past order
+    await new PastOrder(pastOrderData).save({ session });
 
-    // 8. Delete the live order
-    await liveOrder.deleteOne();
+    // 8️⃣ Update PaymentLog (COD only)
+    if (liveOrder.payment) {
+      await PaymentLog.findOneAndUpdate(
+        { _id: liveOrder.payment, status: "NOT_COLLECTED" },
+        { status: "SUCCESS" },
+        { session }
+      );
+    }
 
-    // 9. Set rider as available
-    await Rider.findByIdAndUpdate(rider_id, {
-      isAvailable: true,
-      servingOrder: null,
-    });
+    // 9️⃣ Delete LiveOrder
+    await liveOrder.deleteOne({ session });
+
+    // 🔟 Update rider availability
+    await Rider.findByIdAndUpdate(
+      rider_id,
+      {
+        isAvailable: true,
+        servingOrder: null,
+        status: "EMPTY",
+      },
+      { session }
+    );
+
+    await RiderMetaData.findOneAndUpdate(
+      { riderId: rider_id },
+      { deliveredAt: Date.now() },
+      { new: true, session }
+    );
+
+    // ✅ Commit transaction
+    await session.commitTransaction();
+    session.endSession();
 
     return res.status(200).json({
       message: "Order marked as delivered and moved to past orders.",
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Error completing order:", error);
     return res.status(500).json({ message: "Internal server error" });
   }

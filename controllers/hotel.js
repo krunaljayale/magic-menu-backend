@@ -874,6 +874,11 @@ module.exports.readyOrder = async (req, res) => {
       );
     }
 
+    const { getIO } = require("../socket");
+    const io = getIO();
+
+    io.emit("NEW_ORDER_AVAILABLE");
+
     return res.status(200).json({ status: "READY" });
   } catch (error) {
     console.error("Error updating order status:", error);
@@ -930,7 +935,7 @@ module.exports.almostReadyOrder = async (req, res) => {
             sound: "magicmenu_zing_enhanced",
             channelId: "custom-sound-channel",
             title: `⏳ ${restaurantName} - Order Almost Ready`,
-            body: "The order will be ready in 5 minutes. Get prepared to pick it up! 🚀",
+            body: "The order will be ready in 10 minutes. Get prepared to pick it up! 🚀",
           },
         },
       };
@@ -981,6 +986,11 @@ module.exports.almostReadyOrder = async (req, res) => {
         )
       );
     }
+
+    const { getIO } = require("../socket");
+    const io = getIO();
+
+    io.emit("NEW_ORDER_AVAILABLE");
 
     return res
       .status(200)
