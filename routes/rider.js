@@ -3,7 +3,7 @@ const router = express.Router();
 
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
-const { getOTP, registerData, login, toggleDuty, auth,registerFCM, newOrder, changeStatus, getHotelData, getOrderData, getCustomerData, getCompleteOrderData, completeOrder, profileInfo, profileEdit, sendTestNotification, acceptOrder, reachedPickup, orderPickedup, orderReachedDrop, getCollectionReport} = require("../controllers/rider");
+const { getOTP, registerData, login, toggleDuty, auth,registerFCM, newOrder, changeStatus, getHotelData, getOrderData, getCustomerData, getCompleteOrderData, completeOrder, profileInfo, profileEdit, sendTestNotification, acceptOrder, reachedPickup, orderPickedup, orderReachedDrop, getCollectionReport, getUnsettledOrders} = require("../controllers/rider");
 
 
 
@@ -23,6 +23,7 @@ router.get('/:id/order-data',authMiddleware,wrapAsync(getOrderData));
 router.get('/:id/customer-data',authMiddleware,wrapAsync(getCustomerData));
 router.get('/:id/complete-data',authMiddleware,wrapAsync(getCompleteOrderData));
 router.get('/:user_id/get-collection-report',authMiddleware,wrapAsync(getCollectionReport));
+router.get('/:user_id/get-unsettled-orders',authMiddleware,wrapAsync(getUnsettledOrders));
 
 // delivery route
 router.post('/:user_id/accept-order', authMiddleware,wrapAsync(acceptOrder));

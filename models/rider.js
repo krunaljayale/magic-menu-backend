@@ -9,6 +9,7 @@ const riderSchema = new Schema(
     password: { type: String, required: true },
     gender: { type: String, default: "Not specified" },
     dob: { type: Date, default: new Date("2000-01-01") },
+    isBlocked: { type: Boolean, default: false, required:true },
     fcmToken: [String],
     location: {
       latitude: { type: Number },

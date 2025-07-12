@@ -160,7 +160,9 @@ module.exports.auth = async (req, res) => {
     }
 
     // Fetch rider data excluding password using select
-    const data = await Rider.findById(id).select("name number email onDuty isAvailable servingOrder status").lean();
+    const data = await Rider.findById(id)
+      .select("name number email onDuty isAvailable servingOrder status")
+      .lean();
 
     // Check if rider exists
     if (!data) {
@@ -208,27 +210,38 @@ module.exports.toggleDuty = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Validate ID
+    // 1️⃣ Validate ID
     if (!id || !mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: "Invalid or Missing ID" });
     }
 
-    // Toggle onDuty status directly using $bit for efficiency
+    // 2️⃣ Fetch rider with current onDuty and isBlocked status
+    const rider = await Rider.findById(id).select("onDuty isBlocked");
+    if (!rider) {
+      return res.status(404).json({ message: "Rider not found" });
+    }
+
+    // 3️⃣ If rider is blocked and trying to go ON duty, block it
+    if (rider.isBlocked && !rider.onDuty) {
+      return res.status(403).json({
+        status: "BLOCKED",
+        message: "You must deposit collected amount to go on-duty.",
+      });
+    }
+
+    // 4️⃣ Toggle duty using $not operator
     const result = await Rider.updateOne({ _id: id }, [
       { $set: { onDuty: { $not: "$onDuty" } } },
     ]);
 
-    // Check if any document was modified
     if (result.modifiedCount === 0) {
-      return res
-        .status(404)
-        .json({ message: "Rider not found or status unchanged" });
+      return res.status(400).json({ message: "Duty status unchanged." });
     }
 
-    // Success response
+    // ✅ Success
     return res
       .status(200)
-      .json({ message: "Duty status updated successfully" });
+      .json({ message: "Duty status updated successfully." });
   } catch (e) {
     console.error("Error at toggleDuty API:", e);
     return res.status(500).json({ message: "Internal Server Error" });
@@ -237,7 +250,14 @@ module.exports.toggleDuty = async (req, res) => {
 
 module.exports.newOrder = async (req, res) => {
   try {
-    const { rider_latitude, rider_longitude } = req.body;
+    const { rider_latitude, rider_longitude, riderId } = req.body;
+    
+    const rider = await Rider.findById(riderId);
+    if (rider.isBlocked) {
+      return res
+        .status(404)
+        .json({ status: "BLOCKED", message: "Rider is blocked." });
+    }
 
     const liveOrders = await LiveOrder.find({
       restaurantStatus: { $in: ["ALMOST_READY", "READY"] },
@@ -653,14 +673,13 @@ module.exports.getCollectionReport = async (req, res) => {
 
   try {
     // Get all past COD orders served by this rider where payment is NOT settled
-    const orders = await PastOrder.find({ rider: user_id })
-      .populate({
-        path: "payment",
-        match: { mode: "COD", isSettled: false },
-        select: "amount",
-      });
+    const orders = await PastOrder.find({ rider: user_id }).populate({
+      path: "payment",
+      match: { mode: "COD", isSettled: false },
+      select: "amount",
+    });
 
-    const unsettledCODOrders = orders.filter(order => order.payment);
+    const unsettledCODOrders = orders.filter((order) => order.payment);
 
     const amountToDeposit = unsettledCODOrders.reduce((total, order) => {
       return total + (order.payment.amount || 0);
@@ -678,6 +697,47 @@ module.exports.getCollectionReport = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching collection report:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+module.exports.getUnsettledOrders = async (req, res) => {
+  const { user_id } = req.params;
+
+  try {
+    const orders = await PastOrder.find({
+      rider: user_id,
+      status: "DELIVERED",
+    })
+      .populate({
+        path: "payment",
+        match: { mode: "COD", isSettled: false },
+        select: "amount",
+      })
+      .populate({
+        path: "hotel",
+        select: "hotel", // returns the hotel name
+      })
+      .sort({ deliveredAt: -1 }); // latest first
+
+    const filteredOrders = orders.filter((order) => order.payment);
+
+    const result = filteredOrders.map((order) => ({
+      orderId: order._id,
+      ticketNumber: order.ticketNumber,
+      deliveredAt: order.deliveredAt,
+      amount: order.payment.amount,
+      totalPrice: order.totalPrice,
+      hotelName: order.hotel?.hotel || "Hotel",
+      items: order.items.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+      })),
+    }));
+
+    return res.status(200).json({ count: result.length, orders: result });
+  } catch (error) {
+    console.error("Error fetching unsettled orders:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -1040,7 +1100,9 @@ module.exports.completeOrder = async (req, res) => {
     }
 
     // 3️⃣ Fetch customer & delivery address
-    const customer = await Customer.findById(liveOrder.customer).session(session);
+    const customer = await Customer.findById(liveOrder.customer).session(
+      session
+    );
     if (!customer) {
       await session.abortTransaction();
       return res.status(404).json({ message: "Customer not found" });
@@ -1125,8 +1187,34 @@ module.exports.completeOrder = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
 
-    return res.status(200).json({
+    res.status(200).json({
       message: "Order marked as delivered and moved to past orders.",
+    });
+
+    setImmediate(async () => {
+      try {
+        const pastCODOrders = await PastOrder.find({
+          rider: rider_id,
+        }).populate({
+          path: "payment",
+          match: { mode: "COD", isSettled: false },
+          select: "amount",
+        });
+
+        const unsettled = pastCODOrders.filter((order) => order.payment);
+        const totalUnsettledAmount = unsettled.reduce((sum, order) => {
+          return sum + (order.payment.amount || 0);
+        }, 0);
+
+        const rider = await Rider.findById(rider_id).select("depositAmount");
+        if (rider) {
+          const shouldBlock =
+            totalUnsettledAmount >= rider.depositAmount * 0.95;
+          await Rider.findByIdAndUpdate(rider_id, { isBlocked: shouldBlock });
+        }
+      } catch (blockCheckError) {
+        console.error("Post-delivery block check failed:", blockCheckError);
+      }
     });
   } catch (error) {
     await session.abortTransaction();
@@ -1145,15 +1233,32 @@ module.exports.profileInfo = async (req, res) => {
       return res.status(400).json({ error: "Invalid Rider ID format" });
     }
 
+    // Get rider profile
     const rider = await Rider.findById(id).select(
-      "name number email dob gender"
+      "name number email dob gender depositAmount"
     );
 
     if (!rider) {
       return res.status(404).json({ error: "Rider not found" });
     }
 
-    return res.status(200).json(rider);
+    // Get collection amount (unsettled COD payments)
+    const orders = await PastOrder.find({ rider: id }).populate({
+      path: "payment",
+      match: { mode: "COD", isSettled: false },
+      select: "amount",
+    });
+
+    const unsettledCODOrders = orders.filter((order) => order.payment);
+
+    const amountToDeposit = unsettledCODOrders.reduce((total, order) => {
+      return total + (order.payment.amount || 0);
+    }, 0);
+
+    return res.status(200).json({
+      ...rider.toObject(),
+      amountToDeposit,
+    });
   } catch (error) {
     console.error("Error fetching rider profile:", error);
     return res.status(500).json({ error: "Internal server error" });
