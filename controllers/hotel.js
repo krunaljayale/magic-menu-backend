@@ -1976,14 +1976,14 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
 
 module.exports.getWeeklyPayoutsReport = async (req, res) => {
   try {
-    const hotelId = req.params.hotelId || req.user?.id; // Adjust based on how auth middleware works
+    const { user_id } = req.params;
 
-    if (!hotelId) {
+    if (!user_id) {
       return res.status(400).json({ message: "Missing hotel ID" });
     }
 
     const settlements = await RestaurantSettlement.find({
-      hotel: hotelId,
+      hotel: user_id,
     }).sort({ weekStart: -1 }); // Most recent first
 
     return res.status(200).json({ settlements });

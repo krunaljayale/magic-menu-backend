@@ -127,11 +127,11 @@ module.exports.checkAlert = async (req, res) => {
   try {
     const data = await GlobalAlert.findOne();
 
-    if (data.isActive) {
-      res.status(200).json(data);
-    } else {
-      res.status(404).json({ message: "No alert at this moment" });
+    if (!data || !data.isActive) {
+      return res.status(404).json({ message: "No alert at this moment" });
     }
+
+    res.status(200).json(data);
   } catch (error) {
     console.error("Error fetching alert:", error);
     res.status(500).json({ message: "Server error", error });

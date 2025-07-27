@@ -26,7 +26,7 @@ const restaurantSettlementSchema = new Schema(
 
     // Admin uploads payment proof
     paymentProofImageUrl: { type: String }, // URL to screenshot/image in S3, Cloudinary, etc.
-    paidAt: { type: Date }, // Date when payment was made
+    paidAt: { type: Date,default: Date.now }, // Date when payment was made
     paidBy: { type: Schema.Types.ObjectId, ref: "Admin" }, // Who made the payment (admin ID)
     paymentMode: { type: String }, // Optional: "UPI", "Bank Transfer", etc.
     remarks: {

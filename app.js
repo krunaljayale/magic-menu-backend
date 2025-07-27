@@ -6,6 +6,7 @@ const express = require("express");
 const http = require("http"); // ✅ Add this
 const connectDB = require("./config/connect");
 const socketManager = require("./socket"); // ✅ Add this
+const cors = require("cors");
 
 const hotelRouter = require("./routes/hotel");
 const customerRouter = require("./routes/customer");
@@ -14,6 +15,11 @@ const riderRouter = require("./routes/rider");
 const adminRouter = require("./routes/admin");
 
 const app = express();
+app.use(cors({
+  origin: "*", //"http://10.237.174.167:3000"
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
 
 const { startWeeklySettlementCron } = require("./cron/weeklySettlement");

@@ -63,7 +63,7 @@ async function generateWeeklySettlements() {
       });
 
       // ⛔ Skip if no delivered AND no rejected orders
-      if (orders.length === 0 && rejectedOrders.length === 0) continue;
+      if (orders.length === 0) continue;
 
       let grossRevenue = 0;
       orders.forEach((order) => {
@@ -74,11 +74,11 @@ async function generateWeeklySettlements() {
 
       // ❗ Calculate deductions (rejected value)
       let deductions = 0;
-      rejectedOrders.forEach((order) => {
-        order.items.forEach((item) => {
-          deductions += item.price * item.quantity;
-        });
-      });
+      // rejectedOrders.forEach((order) => {
+      //   order.items.forEach((item) => {
+      //     deductions += item.price * item.quantity;
+      //   });
+      // });
 
       const commissionRate = 0.2;
       const gstRate = 0.18;
