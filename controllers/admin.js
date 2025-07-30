@@ -14,6 +14,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const moment = require("moment-timezone");
+const admin = require("../config/firebaseAdmin");
 
 module.exports.registerAdmin = async (req, res) => {
   try {
@@ -137,6 +138,116 @@ module.exports.settleRestaurantSettlements = async (req, res) => {
       message: "Failed to generate manual settlements.",
       error: err.message,
     });
+  }
+};
+
+// Send push notification contrller
+module.exports.sendPushNotification = async (req, res) => {
+  try {
+    const { title, message } = req.body;
+
+    if (!title || !message) {
+      return res
+        .status(400)
+        .json({ message: "Title and message are required" });
+    }
+
+    // ✅ Find all customers who have notifications enabled and valid tokens
+    const customers = await Customer.find({
+      notificationsEnabled: true,
+      fcmToken: { $exists: true, $not: { $size: 0 } },
+    }).select("_id fcmToken");
+
+    const tokens = customers.flatMap((c) =>
+      Array.isArray(c.fcmToken) ? c.fcmToken : []
+    );
+    const uniqueTokens = [...new Set(tokens)];
+
+    if (uniqueTokens.length === 0) {
+      return res.status(200).json({ message: "No valid FCM tokens found" });
+    }
+
+    // 📣 Prepare FCM message
+    const notification = {
+      tokens: uniqueTokens,
+      android: {
+        notification: {
+          title,
+          body: message,
+          sound: "magicmenu_zing_enhanced",
+          channelId: "custom-sound-channel",
+        },
+      },
+      data: {
+        type: "ADMIN_NOTIFICATION",
+        title,
+        body: message,
+      },
+    };
+
+    const failedTokens = [];
+
+    // 🚀 Send notification (multicast preferred)
+    if (typeof admin.messaging().sendMulticast === "function") {
+      const response = await admin.messaging().sendMulticast(notification);
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          const code = resp.error?.code;
+          if (
+            code === "messaging/registration-token-not-registered" ||
+            code === "messaging/invalid-argument"
+          ) {
+            failedTokens.push(uniqueTokens[idx]);
+          }
+        }
+      });
+    } else {
+      await Promise.all(
+        uniqueTokens.map((token) =>
+          admin
+            .messaging()
+            .send({
+              token,
+              android: notification.android,
+              data: notification.data,
+            })
+            .catch((err) => {
+              const code = err?.code;
+              if (
+                code === "messaging/registration-token-not-registered" ||
+                code === "messaging/invalid-argument"
+              ) {
+                failedTokens.push(token);
+              }
+            })
+        )
+      );
+    }
+
+    // 🧹 Clean invalid tokens from each customer
+    if (failedTokens.length > 0) {
+      await Promise.all(
+        customers.map(async (customer) => {
+          const validTokens = (customer.fcmToken || []).filter(
+            (t) => !failedTokens.includes(t)
+          );
+          if (validTokens.length !== customer.fcmToken.length) {
+            await Customer.findByIdAndUpdate(customer._id, {
+              fcmToken: validTokens,
+            });
+          }
+        })
+      );
+    }
+
+    return res.status(200).json({
+      message: `✅ Notification sent to customers. ${
+        uniqueTokens.length - failedTokens.length
+      } succeeded, ${failedTokens.length} tokens removed.`,
+    });
+  } catch (error) {
+    console.error("Error in sendPushNotification:", error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
 

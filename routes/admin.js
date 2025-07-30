@@ -2,12 +2,15 @@ const express = require("express");
 const router = express.Router();
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
-const { settleRestaurantSettlements, registerAdmin, loginAdmin, getRegisteredRiders, getRiderData, editRiderDeposit, toggleBlockRider, getUnsettledOrders, markSettledOrders, getRegisteredRestaurants, getRestaurantData, profileRoute, toggleRestaurantBrand, getWeeklyOrders, getPendingPayouts, payPendingPayout, getPaidPayouts, getLiveOrders, getDashBodardData, getPastOrders, getSearchedOrder } = require("../controllers/admin");
+const { settleRestaurantSettlements, registerAdmin, loginAdmin, getRegisteredRiders, getRiderData, editRiderDeposit, toggleBlockRider, getUnsettledOrders, markSettledOrders, getRegisteredRestaurants, getRestaurantData, profileRoute, toggleRestaurantBrand, getWeeklyOrders, getPendingPayouts, payPendingPayout, getPaidPayouts, getLiveOrders, getDashBodardData, getPastOrders, getSearchedOrder, sendPushNotification } = require("../controllers/admin");
 
 router.post("/register-admin/:admin_id", wrapAsync(registerAdmin));
 router.post("/login-admin", wrapAsync(loginAdmin));
 router.get('/profile/:admin_id',wrapAsync(profileRoute));
 // router.get('/settle-weekly-payouts',wrapAsync(settleRestaurantSettlements));
+
+// Send push notification route
+router.post('/send-push-notification',authMiddleware,wrapAsync(sendPushNotification))
 
 // Dashboard route
 router.get("/get-dashboard-data",authMiddleware,wrapAsync(getDashBodardData));
@@ -35,5 +38,8 @@ router.post("/pay-pending-payout/:id",authMiddleware,wrapAsync(payPendingPayout)
 router.get("/get-live-orders",authMiddleware,wrapAsync(getLiveOrders));
 router.get("/get-past-orders",authMiddleware,wrapAsync(getPastOrders));
 router.get("/get-searched-past-order/:orderID",authMiddleware,wrapAsync(getSearchedOrder));
+
+
+
 
 module.exports = router;
