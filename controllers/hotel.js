@@ -1930,11 +1930,11 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
 
     // ✅ Calculate rejected total amount
     let rejectedAmount = 0;
-    rejectedOrders.forEach((order) => {
-      order.items.forEach((item) => {
-        rejectedAmount += item.price * item.quantity;
-      });
-    });
+    // rejectedOrders.forEach((order) => {
+    //   order.items.forEach((item) => {
+    //     rejectedAmount += item.price * item.quantity;
+    //   });
+    // });
 
     const totalOrders = deliveredOrders.length;
 
