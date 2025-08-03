@@ -16,7 +16,7 @@ const customerSchema = new Schema(
         latitude: { type: Number, required: true },
         longitude: { type: Number, required: true },
         houseNo: { type: Number, required: true },
-        buildingNo: { type: String, required: true },
+        buildingNo: { type: String, required: false },
         landmark: { type: String, required: false },
         isDefault: { type: Boolean, default: false },
       },
