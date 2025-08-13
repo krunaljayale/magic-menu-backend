@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const {homeRoute, loginRoute, getOTP, registerData, completeProfile, authToken, getReadyOrders, getPickedUpOrders, getNewOrders, acceptOrder, readyOrder, almostReadyOrder, newOrder, toggleDuty, getRestaurantData, getRestaurantCategories, getCategoriesItems, changeListingStockStatus, addListing, changeListingRecommendStatus, addCategory, updateCategory, deleteCategory, updateListing,  getAddOnCategoriesItems, changeCategoryStatus, getRestaurantProfile, updateRestaurantProfile, getBusinessReport, getOrderSummary, getTopSellingItems, getTodayOrders, getYesterdayOrders, getCustomOrders, getWeeklyRevenueReport, getRunningWeekOrders, getWeeklyPayoutsReport, rejectOrder, toggleDutyEmergency, registerFCM } = require('../controllers/hotel');
+const {homeRoute, loginRoute, getOTP, registerData, completeProfile, authToken, getReadyOrders, getPickedUpOrders, getNewOrders, acceptOrder, readyOrder, almostReadyOrder, newOrder, toggleDuty, getRestaurantData, getRestaurantCategories, getCategoriesItems, changeListingStockStatus, addListing, changeListingRecommendStatus, addCategory, updateCategory, deleteCategory, updateListing,  getAddOnCategoriesItems, changeCategoryStatus, getRestaurantProfile, updateRestaurantProfile, getBusinessReport, getOrderSummary, getTopSellingItems, getTodayOrders, getYesterdayOrders, getCustomOrders, getWeeklyRevenueReport, getRunningWeekOrders, getWeeklyPayoutsReport, rejectOrder, toggleDutyEmergency, registerFCM, deleteListing } = require('../controllers/hotel');
 const wrapAsync = require('../utils/wrapAsync');
 const authMiddleware = require('../utils/jwtAuth');
 
@@ -36,7 +36,8 @@ router.post('/:user_id/add-category',authMiddleware, wrapAsync(addCategory));
 router.put('/:user_id/update-category',authMiddleware, wrapAsync(updateCategory));
 router.post('/:user_id/delete-category',authMiddleware, wrapAsync(deleteCategory));
 router.patch('/:user_id/update-listing/:item_id',authMiddleware, wrapAsync(updateListing));
-router.get('/:user_id/get-addon-category-listings/:category',authMiddleware, wrapAsync(getAddOnCategoriesItems));
+router.patch('/delete-listing/:item_id',authMiddleware, wrapAsync(deleteListing));
+router.get('/:user_id/get-addon-category-listings/:query',authMiddleware, wrapAsync(getAddOnCategoriesItems));
 router.put('/:user_id/mark-category-unavailable',authMiddleware, wrapAsync(changeCategoryStatus));
 router.get('/:user_id/get-business-report',authMiddleware, wrapAsync(getBusinessReport));
 router.get('/:user_id/get-order-summary',authMiddleware, wrapAsync(getOrderSummary));

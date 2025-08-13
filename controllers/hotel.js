@@ -410,7 +410,7 @@ module.exports.getNewOrders = async (req, res) => {
     })
       .populate({
         path: "customer",
-        select: "name",
+        select: "name number",
       })
       .populate({
         path: "rider",
@@ -428,6 +428,7 @@ module.exports.getNewOrders = async (req, res) => {
       _id: order._id,
       ticketNumber: order.ticketNumber,
       customerName: order.customer?.name || "Unknown",
+      customerNumber: order.customer?.number,
       items: order.items.map((i) => ({
         name: i.item?.name || "Deleted Item",
         quantity: i.quantity,
@@ -1299,6 +1300,29 @@ module.exports.updateListing = async (req, res) => {
   }
 };
 
+module.exports.deleteListing = async (req, res) => {
+  try {
+    const { item_id } = req.params;
+
+    if (!item_id) {
+      return res.status(400).json({ message: "Item ID is required" });
+    }
+
+    const deletedItem = await Listing.findByIdAndDelete(item_id);
+
+    if (!deletedItem) {
+      return res.status(404).json({ message: "Item not found" });
+    }
+
+    res.status(200).json({ message: "Item deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting item:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to delete item. Try again later." });
+  }
+};
+
 module.exports.addCategory = async (req, res) => {
   const { user_id } = req.params;
   const category = req.body;
@@ -1416,21 +1440,27 @@ module.exports.deleteCategory = async (req, res) => {
 
 module.exports.getAddOnCategoriesItems = async (req, res) => {
   try {
-    const { user_id, category } = req.params;
+    const { user_id, query } = req.params;
 
-    if (!user_id || !category) {
+    if (!user_id || !query) {
       return res
         .status(400)
-        .json({ message: "User ID and category are required." });
+        .json({ message: "User ID and query are required." });
     }
 
-    const items = await Listing.find({ owner: user_id, category }).select(
-      "name _id"
-    );
+    const filter = {
+      owner: user_id,
+      $or: [{ category: query }, { name: { $regex: query, $options: "i" } }],
+    };
+
+    const items = await Listing.find(filter)
+      .select("name _id")
+      .limit(50)
+      .lean();
 
     res.status(200).json(items);
   } catch (error) {
-    console.error("Error fetching category items:", error);
+    console.error("Error fetching category or item name:", error);
     res
       .status(500)
       .json({ message: "Failed to fetch items. Try again later." });
