@@ -36,9 +36,9 @@ module.exports.data = async (req, res) => {
 
     // 🧠 Helper to match location with buffered service areas
     const getMatchingServiceArea = (lat, lon) => {
-      const point = turf.point([lon, lat]); // [lon, lat]
+      const point = turf.point([lon, lat]); // GeoJSON expects [lon, lat]
       return serviceAreas.find((area) => {
-        const rawPolygon = turf.polygon([area.polygon[0]]);
+        const rawPolygon = turf.polygon(area.polygon); // 👈 FIXED
         const bufferedPolygon = turf.buffer(rawPolygon, 0.3, {
           units: "kilometers",
         });
@@ -84,7 +84,7 @@ module.exports.data = async (req, res) => {
     const { latitude: custLat, longitude: custLon } = selectedCoords;
 
     // Use non-buffered polygon for hotel filtering (precise delivery zone)
-    const polygon = turf.polygon([matchedArea.polygon[0]]);
+    const polygon = turf.polygon(matchedArea.polygon);
 
     // ✅ 4. Filter owners inside the matched polygon
     const owners = await Owner.find();
@@ -975,7 +975,6 @@ module.exports.paymentConfirm = async (req, res) => {
       payment: paymentId,
     };
     const [createdOrder] = await LiveOrder.create([orderData], { session });
-
 
     await session.commitTransaction();
     session.endSession();
