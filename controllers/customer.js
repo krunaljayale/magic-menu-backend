@@ -96,25 +96,118 @@ module.exports.data = async (req, res) => {
       return turf.booleanPointInPolygon(point, polygon);
     });
 
-    // ✅ 5. Enrich owners with distance and ETA
-    const enrichedOwners = filteredOwners.map((ownerDoc) => {
-      const owner = ownerDoc.toObject();
-      const { latitude: ownLat, longitude: ownLon } = owner.location;
+    // ✨ PRIMARY PATH: Fetch all explicitly recommended items efficiently ✨
+    const ownerIds = filteredOwners.map((owner) => owner._id);
+    const recommendedListings = await Listing.find(
+      {
+        owner: { $in: ownerIds },
+        isRecommended: true,
+        inStock: true,
+      },
+      {
+        name: 1,
+        discountedPrice: 1,
+        images: 1,
+        isVeg: 1,
+        owner: 1,
+        _id: 1,
+      }
+    );
+    const listingsByOwner = recommendedListings.reduce((acc, listing) => {
+      const ownerId = listing.owner.toString();
+      if (!acc[ownerId]) acc[ownerId] = [];
+      acc[ownerId].push(listing);
+      return acc;
+    }, {});
 
-      const distanceKm = calculateDistance(custLat, custLon, ownLat, ownLon);
-      const travelTimeMin = (distanceKm / 25) * 60;
-      const rawDeliveryTime = travelTimeMin + 10;
+    // ✅ 5. Final Enrichment Step with Fallback Logic
+    const enrichedOwners = await Promise.all(
+      filteredOwners.map(async (ownerDoc) => {
+        const owner = ownerDoc.toObject();
+        let itemsToShow = [];
 
-      // ✅ Enforce minimum display values
-      const safeDistanceKm = distanceKm.toFixed(2);
-      const safeDeliveryTimeMin = Math.max(10, Math.round(rawDeliveryTime));
+        // Check if the owner has explicitly recommended items
+        const explicitlyRecommended = listingsByOwner[owner._id.toString()];
 
-      return {
-        ...owner,
-        distanceKm: safeDistanceKm,
-        deliveryTimeMin: safeDeliveryTimeMin,
-      };
-    });
+        if (explicitlyRecommended && explicitlyRecommended.length > 0) {
+          itemsToShow = explicitlyRecommended;
+        } else {
+          // ✨ FALLBACK PATH: If no recommended items, get 5 random items from different categories ✨
+          itemsToShow = await Listing.aggregate([
+            // 1. Match stage -
+            {
+              $match: {
+                owner: new mongoose.Types.ObjectId(owner._id),
+                discountedPrice: { $gte: 100 },
+                "images.0.url": {
+                  $ne: "https://dummyimage.com/200x200/ccc/fff&text=No+Image",
+                },
+              },
+            },
+
+            // 2. Group by category
+            {
+              $group: {
+                _id: "$category",
+                item: { $first: "$$ROOT" },
+              },
+            },
+
+            // 3. Promote the item document back to the top level
+            { $replaceRoot: { newRoot: "$item" } },
+
+            // 4. ✨ NEW ✨ Project stage to select specific fields
+            {
+              $project: {
+                name: 1,
+                discountedPrice: 1,
+                images: 1,
+                isVeg: 1,
+                _id: 1,
+              },
+            },
+
+            // 5. Randomly sample up to 5 of these items
+            { $sample: { size: 5 } },
+          ]);
+        }
+
+        // Calculate distance and ETA
+        const { latitude: ownLat, longitude: ownLon } = owner.location;
+        const distanceKm = calculateDistance(custLat, custLon, ownLat, ownLon);
+        const travelTimeMin = (distanceKm / 25) * 60;
+        const rawDeliveryTime = travelTimeMin + 10;
+        const safeDistanceKm = distanceKm.toFixed(2);
+        const safeDeliveryTimeMin = Math.max(10, Math.round(rawDeliveryTime));
+
+        return {
+          ...owner,
+          distanceKm: safeDistanceKm,
+          deliveryTimeMin: safeDeliveryTimeMin,
+          recommendedItems: itemsToShow, // Use the determined list of items
+        };
+      })
+    );
+
+    // ✅ 5.(old) Enrich owners with distance and ETA
+    // const enrichedOwners = filteredOwners.map((ownerDoc) => {
+    //   const owner = ownerDoc.toObject();
+    //   const { latitude: ownLat, longitude: ownLon } = owner.location;
+
+    //   const distanceKm = calculateDistance(custLat, custLon, ownLat, ownLon);
+    //   const travelTimeMin = (distanceKm / 25) * 60;
+    //   const rawDeliveryTime = travelTimeMin + 10;
+
+    //   // ✅ Enforce minimum display values
+    //   const safeDistanceKm = distanceKm.toFixed(2);
+    //   const safeDeliveryTimeMin = Math.max(10, Math.round(rawDeliveryTime));
+
+    //   return {
+    //     ...owner,
+    //     distanceKm: safeDistanceKm,
+    //     deliveryTimeMin: safeDeliveryTimeMin,
+    //   };
+    // });
 
     return res.status(200).json(enrichedOwners);
   } catch (err) {
@@ -125,13 +218,42 @@ module.exports.data = async (req, res) => {
 
 module.exports.checkAlert = async (req, res) => {
   try {
-    const data = await GlobalAlert.findOne();
+    // If no versionCode is provided → default to 5 (old app in production)
+    let clientVersionCode = req.params.versionCode
+      ? parseInt(req.params.versionCode, 10)
+      : 5;
 
-    if (!data || !data.isActive) {
+    if (isNaN(clientVersionCode)) {
+      clientVersionCode = 5; // fallback safety
+    }
+
+    const activeAlert = await GlobalAlert.findOne({
+      isActive: true,
+      minimumVersionCode: { $gt: clientVersionCode },
+    });
+
+    if (!activeAlert) {
+      return res
+        .status(404)
+        .json({ message: "No active alert for this version" });
+    }
+
+    res.status(200).json(activeAlert);
+  } catch (error) {
+    console.error("Error fetching alert:", error);
+    res.status(500).json({ message: "Server error", error });
+  }
+};
+
+module.exports.getAlert = async (req, res) => {
+  try {
+    const activeAlert = await GlobalAlert.findOne({ isActive: true });
+
+    if (!activeAlert) {
       return res.status(404).json({ message: "No alert at this moment" });
     }
 
-    res.status(200).json(data);
+    res.status(200).json(activeAlert);
   } catch (error) {
     console.error("Error fetching alert:", error);
     res.status(500).json({ message: "Server error", error });
@@ -192,6 +314,19 @@ module.exports.listingData = async (req, res) => {
     category: category,
     inStock: true,
   });
+
+  // console.log("Category data - ",data)
+  return res.send(data);
+};
+
+module.exports.recommendedData = async (req, res) => {
+  let { id } = req.params;
+  let data = await Listing.find({
+    owner: id,
+    inStock: true,
+    isRecommended: true,
+  });
+
   return res.send(data);
 };
 
@@ -847,7 +982,7 @@ module.exports.pastOrder = async (req, res) => {
       })
       .populate({
         path: "payment",
-        select: "transactionId status amount createdAt",
+        select: "transactionId status amount createdAt mode",
       })
       .sort({ orderedAt: -1 });
 
@@ -858,6 +993,7 @@ module.exports.pastOrder = async (req, res) => {
     const formattedData = data.map((order) => ({
       _id: order._id,
       ticketNumber: order.ticketNumber,
+      reason: order.reason,
       orderOtp: order.orderOtp,
       status: order.status,
       customer: order.customer,
@@ -1161,7 +1297,11 @@ module.exports.liveOrderSupport = async (req, res) => {
 
   try {
     // Fetch the order and populate restaurant/owner
-    const order = await LiveOrder.findById(order_id).populate("hotel");
+    let order = await LiveOrder.findById(order_id).populate("hotel");
+
+    if (!order) {
+      order = await PastOrder.findById(order_id).populate("hotel");
+    }
 
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
@@ -1173,12 +1313,12 @@ module.exports.liveOrderSupport = async (req, res) => {
       return res.status(404).json({ error: "Support contact not available" });
     }
 
-    res.json({
+    res.status(200).json({
       hotel: hotel.number || null,
       support: process.env.SUPPORT || null,
     });
   } catch (err) {
-    console.error("Error fetching live order support:", err);
+    console.error("Error fetching live-past order support:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 };

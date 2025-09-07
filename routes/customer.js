@@ -26,24 +26,28 @@ const {
   codOrderConfirm,
   toggleNotification,
   checkAlert,
-  liveOrderSupport
+  liveOrderSupport,
+  getAlert,
+  recommendedData
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
 
 //Support
-router.get("/:order_id/live-order/support", authMiddleware, wrapAsync(liveOrderSupport));
+router.get("/:order_id/live-past-order/support", authMiddleware, wrapAsync(liveOrderSupport));
 
 // Public Routes (no authentication required)
 router.post("/:user_id/data",authMiddleware,wrapAsync(data));
 router.get("/:_id/:id/hotelData", wrapAsync(hotelData));
+router.get("/:id/listingData/recommended", wrapAsync(recommendedData));
 router.get("/:id/listingData/:category", wrapAsync(listingData));
 router.post("/get-addons", wrapAsync(getAddOns));
 router.post("/getotp", wrapAsync(getOTP));
 router.post("/register", wrapAsync(registerData));
 router.post("/login", wrapAsync(login));
 
-router.get("/checkAlert", wrapAsync(checkAlert));
+router.get("/checkAlert/:versionCode?", wrapAsync(checkAlert));
+router.get("/getAlert", wrapAsync(getAlert));
 
 // Protected Routes (authentication required)
 router.get("/:id/profile", authMiddleware, wrapAsync(profile));// Only authenticated users can access profile
