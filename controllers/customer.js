@@ -11,7 +11,6 @@ const PaymentLog = require("../models/paymentLog");
 const Rider = require("../models/rider");
 const EmailOtp = require("../models/emailOTP");
 const GlobalAlert = require("../models/globalAlert");
-const { sendEmail } = require("../utils/emailSender");
 const {
   generateTransactionID,
   generateTicket,
@@ -21,6 +20,7 @@ const { calculateDistance } = require("../utils/mapUtils");
 const turf = require("@turf/turf");
 const { serviceAreas } = require("../utils/serviceAreas");
 const admin = require("../config/firebaseAdmin");
+const { sendEmail } = require("../utils/brevoEmailSender");
 
 module.exports.data = async (req, res) => {
   try {
