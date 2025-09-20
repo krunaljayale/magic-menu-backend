@@ -283,43 +283,31 @@ module.exports.checkAlertCustomer = async (req, res) => {
 
 module.exports.getAlertCustomer = async (req, res) => {
   try {
-    const { versionCode } = req.params;
-
-    // Default to 5 if not provided
-    let clientVersionCode = versionCode ? parseInt(versionCode, 10) : 5;
-    if (isNaN(clientVersionCode)) clientVersionCode = 5;
-
-    // Fetch the active alert (new schema)
+    // Always fetch the active alert
     const activeAlert = await GlobalAlert.findOne({ isActive: true });
 
     if (!activeAlert) {
       return res.status(404).json({ message: "No alert at this moment" });
     }
 
-    // Get customer app-specific minimum version and link
-    const minVersion = activeAlert.minimumVersionCodes.get("customer");
-    const buttonLink = activeAlert.buttonLinks.get("customer") || "";
+    // Get the per-app data
+    const customerMinVersion = activeAlert.minimumVersionCodes.get("customer");
+    const customerMaxVersion = activeAlert.maximumVersionCodes.get("customer");
+    const customerButtonLink =
+      activeAlert.buttonLinks.get("customer") ||
+      activeAlert.buttonLinks.get("all") ||
+      "";
 
-    // If the version is below the minimum → alert applies
-    if (minVersion !== undefined && clientVersionCode < minVersion) {
-      // Return **old format** for backward compatibility
-      return res.status(200).json({
-        title: activeAlert.title,
-        message: activeAlert.message,
-        imageUrl: activeAlert.imageUrl || null,
-        buttonText: activeAlert.buttonText, // same for all apps
-        buttonLink, // customer-specific link
-        minimumVersionCode: minVersion,
-        maximumVersionCode:
-          activeAlert.maximumVersionCodes.get("customer") || null,
-        isSkippable: activeAlert.isSkippable,
-        type: activeAlert.type,
-        createdAt: activeAlert.createdAt,
-      });
-    }
+    // Attach customer-specific buttonLink (optional)
+    const alertForCustomer = {
+      ...activeAlert.toObject(),
+      buttonLink: customerButtonLink,
+      minimumVersion: customerMinVersion, // optional, for clarity
+      maximumVersion: customerMaxVersion, // optional
+    };
 
-    // No alert needed
-    return res.status(204).json({ message: "No alert for this version" });
+    // Always return the alert for customer
+    return res.status(200).json(alertForCustomer);
   } catch (error) {
     console.error("Error fetching alert:", error);
     return res.status(500).json({ message: "Server error", error });

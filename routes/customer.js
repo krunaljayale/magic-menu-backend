@@ -29,7 +29,7 @@ const {
   categoryData,
   listingData,
   checkAlertCustomer,
-  getAlertCustomer
+  getAlertCustomer,
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
