@@ -217,21 +217,45 @@ module.exports.data = async (req, res) => {
   }
 };
 
-module.exports.checkAlert = async (req, res) => {
+// module.exports.checkAlert = async (req, res) => {
+//   try {
+//     // If no versionCode is provided → default to 5 (old app in production)
+//     let clientVersionCode = req.params.versionCode
+//       ? parseInt(req.params.versionCode, 10)
+//       : 5;
+
+//     if (isNaN(clientVersionCode)) {
+//       clientVersionCode = 5; // fallback safety
+//     }
+
+//     const activeAlert = await GlobalAlert.findOne({
+//       isActive: true,
+//       minimumVersionCode: { $gt: clientVersionCode },
+//     });
+
+//     if (!activeAlert) {
+//       return res
+//         .status(404)
+//         .json({ message: "No active alert for this version" });
+//     }
+
+//     res.status(200).json(activeAlert);
+//   } catch (error) {
+//     console.error("Error fetching alert:", error);
+//     res.status(500).json({ message: "Server error", error });
+//   }
+// };
+
+module.exports.checkAlertCustomer = async (req, res) => {
   try {
-    // If no versionCode is provided → default to 5 (old app in production)
-    let clientVersionCode = req.params.versionCode
-      ? parseInt(req.params.versionCode, 10)
-      : 5;
+    const { versionCode } = req.params;
 
-    if (isNaN(clientVersionCode)) {
-      clientVersionCode = 5; // fallback safety
-    }
+    // Default to 5 if no version provided or invalid
+    let clientVersionCode = versionCode ? parseInt(versionCode, 10) : 5;
+    if (isNaN(clientVersionCode)) clientVersionCode = 5;
 
-    const activeAlert = await GlobalAlert.findOne({
-      isActive: true,
-      minimumVersionCode: { $gt: clientVersionCode },
-    });
+    // Fetch the single active alert
+    const activeAlert = await GlobalAlert.findOne({ isActive: true });
 
     if (!activeAlert) {
       return res
@@ -239,25 +263,64 @@ module.exports.checkAlert = async (req, res) => {
         .json({ message: "No active alert for this version" });
     }
 
-    res.status(200).json(activeAlert);
+    // Get minimum version for the Customer app
+    const minVersion = activeAlert.minimumVersionCodes.get("customer");
+
+    // If the version is below the minimum → alert applies
+    if (minVersion !== undefined && clientVersionCode < minVersion) {
+      return res.status(200).json(activeAlert);
+    }
+
+    // Otherwise, no alert needed
+    return res.status(204).json({ message: "No alert for this version" });
   } catch (error) {
     console.error("Error fetching alert:", error);
-    res.status(500).json({ message: "Server error", error });
+    return res.status(500).json({ message: "Server error", error });
   }
 };
 
-module.exports.getAlert = async (req, res) => {
+module.exports.getAlertCustomer = async (req, res) => {
   try {
+    const { versionCode } = req.params;
+
+    // Default to 5 if not provided
+    let clientVersionCode = versionCode ? parseInt(versionCode, 10) : 5;
+    if (isNaN(clientVersionCode)) clientVersionCode = 5;
+
+    // Fetch the active alert (new schema)
     const activeAlert = await GlobalAlert.findOne({ isActive: true });
 
     if (!activeAlert) {
       return res.status(404).json({ message: "No alert at this moment" });
     }
 
-    res.status(200).json(activeAlert);
+    // Get customer app-specific minimum version and link
+    const minVersion = activeAlert.minimumVersionCodes.get("customer");
+    const buttonLink = activeAlert.buttonLinks.get("customer") || "";
+
+    // If the version is below the minimum → alert applies
+    if (minVersion !== undefined && clientVersionCode < minVersion) {
+      // Return **old format** for backward compatibility
+      return res.status(200).json({
+        title: activeAlert.title,
+        message: activeAlert.message,
+        imageUrl: activeAlert.imageUrl || null,
+        buttonText: activeAlert.buttonText, // same for all apps
+        buttonLink, // customer-specific link
+        minimumVersionCode: minVersion,
+        maximumVersionCode:
+          activeAlert.maximumVersionCodes.get("customer") || null,
+        isSkippable: activeAlert.isSkippable,
+        type: activeAlert.type,
+        createdAt: activeAlert.createdAt,
+      });
+    }
+
+    // No alert needed
+    return res.status(204).json({ message: "No alert for this version" });
   } catch (error) {
     console.error("Error fetching alert:", error);
-    res.status(500).json({ message: "Server error", error });
+    return res.status(500).json({ message: "Server error", error });
   }
 };
 
@@ -337,7 +400,6 @@ module.exports.listingData = async (req, res) => {
         name: regex,
         // inStock: true,
       });
-
 
       if (!mainItem) {
         return res.status(404).json({ error: "No matching item found" });

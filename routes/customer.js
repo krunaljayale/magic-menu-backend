@@ -23,13 +23,13 @@ const {
   getAddOns,
   codOrderConfirm,
   toggleNotification,
-  checkAlert,
   liveOrderSupport,
-  getAlert,
   recommendedData,
   queryRestaurant,
   categoryData,
-  listingData
+  listingData,
+  checkAlertCustomer,
+  getAlertCustomer
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
@@ -48,8 +48,8 @@ router.post("/getotp", wrapAsync(getOTP));
 router.post("/register", wrapAsync(registerData));
 router.post("/login", wrapAsync(login));
 
-router.get("/checkAlert/:versionCode?", wrapAsync(checkAlert));
-router.get("/getAlert", wrapAsync(getAlert));
+router.get("/checkAlert/:versionCode?", wrapAsync(checkAlertCustomer));
+router.get("/getAlert", wrapAsync(getAlertCustomer));
 
 // Protected Routes (authentication required)
 router.get("/:id/profile", authMiddleware, wrapAsync(profile));// Only authenticated users can access profile
