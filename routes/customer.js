@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
 const {
-  listingData,
   hotelData,
   data,
   getOTP,
@@ -9,7 +8,6 @@ const {
   login,
   profile,
   categorySuggestion,
-  categoryRestaurant,
   allAddress,
   addAddress,
   updateAddress,
@@ -28,7 +26,10 @@ const {
   checkAlert,
   liveOrderSupport,
   getAlert,
-  recommendedData
+  recommendedData,
+  queryRestaurant,
+  categoryData,
+  listingData
 } = require("../controllers/customer");
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
@@ -39,8 +40,9 @@ router.get("/:order_id/live-past-order/support", authMiddleware, wrapAsync(liveO
 // Public Routes (no authentication required)
 router.post("/:user_id/data",authMiddleware,wrapAsync(data));
 router.get("/:_id/:id/hotelData", wrapAsync(hotelData));
-router.get("/:id/listingData/recommended", wrapAsync(recommendedData));
-router.get("/:id/listingData/:category", wrapAsync(listingData));
+router.get("/:id/categoryData/recommended", wrapAsync(recommendedData));
+router.get("/:id/categoryData/:category", wrapAsync(categoryData));
+router.get("/:id/listingData/:query", wrapAsync(listingData));
 router.post("/get-addons", wrapAsync(getAddOns));
 router.post("/getotp", wrapAsync(getOTP));
 router.post("/register", wrapAsync(registerData));
@@ -77,7 +79,7 @@ router.post("/COD/order-confirm",authMiddleware,wrapAsync(codOrderConfirm)); // 
 
 // Category routes (could be public or protected based on your use case)
 router.get("/:category/suggestion", wrapAsync(categorySuggestion));
-router.get("/:user_id/:category/restaurant", wrapAsync(categoryRestaurant));
+router.get("/:user_id/:query/restaurant", wrapAsync(queryRestaurant));
 
 
 

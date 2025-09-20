@@ -21,6 +21,7 @@ const turf = require("@turf/turf");
 const { serviceAreas } = require("../utils/serviceAreas");
 const admin = require("../config/firebaseAdmin");
 const { sendEmail } = require("../utils/brevoEmailSender");
+const { escapeRegex } = require("../utils/utilityHelpers");
 
 module.exports.data = async (req, res) => {
   try {
@@ -308,15 +309,83 @@ module.exports.hotelData = async (req, res) => {
 };
 
 module.exports.listingData = async (req, res) => {
-  let { id, category } = req.params;
-  let data = await Listing.find({
-    owner: id,
-    category: category,
-    inStock: true,
-  });
+  try {
+    let { id, query } = req.params;
+    if (!id || !query) {
+      return res.status(400).json({ error: "Owner id and query are required" });
+    }
 
-  // console.log("Category data - ",data)
-  return res.send(data);
+    const regex = new RegExp(escapeRegex(query), "i");
+
+    let mainItem;
+    let items = [];
+
+    // Step 1: Try by category
+    mainItem = await Listing.find({
+      owner: id,
+      category: regex,
+      // inStock: true,
+    });
+
+    if (mainItem.length > 0) {
+      // ✅ Found by category → only return this one
+      items = mainItem;
+    } else {
+      // Step 2: Try by name
+      mainItem = await Listing.findOne({
+        owner: id,
+        name: regex,
+        // inStock: true,
+      });
+
+
+      if (!mainItem) {
+        return res.status(404).json({ error: "No matching item found" });
+      }
+
+      // Step 3: Suggestions (same category, excluding main)
+      const suggestions = await Listing.find({
+        owner: id,
+        category: mainItem.category,
+        // inStock: true,
+        _id: { $ne: mainItem._id },
+      }).limit(5);
+
+      items = [mainItem, ...suggestions];
+    }
+
+    return res.json(items);
+  } catch (error) {
+    console.error("Error in listingData:", error);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+module.exports.categoryData = async (req, res) => {
+  try {
+    const { id, category } = req.params;
+
+    if (!id || !category) {
+      return res
+        .status(400)
+        .json({ error: "Owner id and category are required" });
+    }
+
+    // Case-insensitive regex for category
+    const regex = new RegExp(`^${category}$`, "i");
+
+    const data = await Listing.find({
+      owner: id,
+      category: regex,
+      isRecommended: false,
+      // inStock: true, // ✅ Uncommented for real use
+    });
+
+    return res.json(data);
+  } catch (error) {
+    console.error("Error in categoryData:", error);
+    return res.status(500).json({ error: "Server error" });
+  }
 };
 
 module.exports.recommendedData = async (req, res) => {
@@ -601,15 +670,65 @@ module.exports.registerFCM = async (req, res) => {
 };
 
 module.exports.categorySuggestion = async (req, res) => {
-  const { category } = req.params;
-  let data = await Category.find({
-    name: { $regex: category, $options: "i" },
-  }).limit(5);
-  res.send(data);
+  try {
+    const { category } = req.params;
+
+    if (!category || category.trim() === "") {
+      return res.status(400).json({ message: "Search term is required" });
+    }
+
+    const regex = new RegExp(category, "i");
+
+    // Run all searches in parallel
+    const [categories, owners, listings] = await Promise.all([
+      Category.find({ name: regex }).select("name image").limit(5),
+      Owner.find({ hotel: regex }).select("hotel logo").limit(5),
+      Listing.find({ name: regex }).select("name images"),
+    ]);
+
+    // Normalize Category results
+    const categoryResults = categories.map((c) => ({
+      id: c._id,
+      name: c.name,
+      image: c.image?.url
+        ? c.image
+        : { url: "https://dummyimage.com/200x200/ccc/fff&text=No+Image" },
+      type: "Category",
+    }));
+
+    // Normalize Owner results (restaurant)
+    const ownerResults = owners.map((o) => ({
+      id: o._id,
+      name: o.hotel,
+      image: o.logo?.url
+        ? o.logo
+        : { url: "https://dummyimage.com/200x200/ccc/fff&text=No+Image" },
+      type: "Restaurant",
+    }));
+
+    // Normalize Listing results (dish)
+    const listingResults = listings.map((l) => ({
+      id: l._id,
+      name: l.name,
+      image:
+        l.images && l.images.length > 0
+          ? l.images[0] // take first image
+          : { url: "https://dummyimage.com/200x200/ccc/fff&text=No+Image" },
+      type: "Dish",
+    }));
+
+    // Merge results
+    const results = [...categoryResults, ...listingResults, ...ownerResults];
+
+    res.json(results);
+  } catch (error) {
+    console.error("Error in categorySuggestion:", error);
+    res.status(500).json({ message: "Server error", error });
+  }
 };
 
-module.exports.categoryRestaurant = async (req, res) => {
-  const { user_id, category } = req.params;
+module.exports.queryRestaurant = async (req, res) => {
+  const { user_id, query } = req.params;
 
   try {
     const customer = await Customer.findById(user_id);
@@ -625,7 +744,6 @@ module.exports.categoryRestaurant = async (req, res) => {
 
     const userPoint = turf.point([defaultLoc.longitude, defaultLoc.latitude]);
 
-    // Check if user's location is within any service area
     const matchedArea = serviceAreas.find((area) =>
       turf.booleanPointInPolygon(userPoint, turf.polygon(area.polygon))
     );
@@ -634,16 +752,16 @@ module.exports.categoryRestaurant = async (req, res) => {
       return res.status(403).json({ error: "Location not in a servable area" });
     }
 
-    // Proceed if location is valid
+    // Escape special regex chars
+    const regex = new RegExp(escapeRegex(query), "i");
+
     const data = await Listing.aggregate([
       {
-        $match: { category: category },
-      },
-      {
-        $group: {
-          _id: "$owner",
+        $match: {
+          $or: [{ category: regex }, { name: regex }],
         },
       },
+      { $group: { _id: "$owner" } },
       {
         $lookup: {
           from: "owners",
@@ -652,13 +770,13 @@ module.exports.categoryRestaurant = async (req, res) => {
           as: "owner",
         },
       },
-      {
-        $unwind: "$owner",
-      },
+      { $unwind: "$owner" },
     ]);
 
-    // (Optional) Filter owners whose own location is also inside that area
     const filtered = data.filter((item) => {
+      if (!item.owner?.location?.longitude || !item.owner?.location?.latitude) {
+        return false;
+      }
       const loc = turf.point([
         item.owner.location.longitude,
         item.owner.location.latitude,
@@ -666,9 +784,9 @@ module.exports.categoryRestaurant = async (req, res) => {
       return turf.booleanPointInPolygon(loc, turf.polygon(matchedArea.polygon));
     });
 
-    res.send(filtered); // or `res.send(filtered)` if filtering by owner location
+    res.json(filtered);
   } catch (error) {
-    console.error(error);
+    console.error("Error in queryRestaurant:", error);
     res.status(500).send({ message: "Error fetching data" });
   }
 };
