@@ -272,7 +272,9 @@ module.exports.checkAlertCustomer = async (req, res) => {
     }
 
     // Otherwise, no alert needed
-    return res.status(204).json({ message: "No alert for this version" });
+    return res
+      .status(404)
+      .json({ message: "No active alert for this version" });
   } catch (error) {
     console.error("Error fetching alert:", error);
     return res.status(500).json({ message: "Server error", error });
