@@ -1,7 +1,7 @@
 const Owner = require("../models/owner");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { sendEmail } = require("../utils/emailSender");
+const { sendEmail } = require("../utils/brevoEmailSender");
 const { default: mongoose } = require("mongoose");
 const LiveOrder = require("../models/liveOrder");
 const Rider = require("../models/rider");
