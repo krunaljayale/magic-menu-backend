@@ -317,6 +317,46 @@ module.exports.toggleDuty = async (req, res) => {
   }
 };
 
+module.exports.changePassword = async (req, res) => {
+  try {
+    const { id } = req.params; // or from JWT if you use middleware
+    const { oldPassword, newPassword } = req.body;
+
+    // Validate input
+    if (!oldPassword || !newPassword) {
+      return res
+        .status(400)
+        .json({ message: "Both old and new passwords are required." });
+    }
+
+    // Find user
+    const user = await Owner.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    // Check old password
+    const isMatch = await bcrypt.compare(oldPassword, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Old password is incorrect." });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    user.password = hashedPassword;
+    await user.save();
+
+    return res.status(200).json({ message: "Password updated successfully." });
+  } catch (e) {
+    console.log("Error at change-password api: ", e);
+    return res.status(500).json({
+      message: "An unexpected error occurred. Please try again later.",
+    });
+  }
+};
+
 module.exports.toggleDutyEmergency = async (req, res) => {
   const session = await mongoose.startSession();
 
