@@ -24,6 +24,7 @@ app.use(express.json());
 
 const { startWeeklySettlementCron } = require("./cron/weeklySettlement");
 require("./cron/autoStopServing");
+require('./cron/restaurantAutoSchedule');
 
 // Routers
 app.use("/hotel", hotelRouter);

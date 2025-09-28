@@ -9,25 +9,56 @@ const ownerSchema = new Schema(
     email: { type: String, required: true },
     hotel: { type: String },
     description: { type: String },
-    fcmToken:[String],
+    fcmToken: [String],
     location: {
       latitude: { type: Number },
       longitude: { type: Number },
-      address: { type: String  },
+      address: { type: String },
     },
     logo: {
       url: String,
       filename: String,
     },
     images: [String],
-    isServing: { type: Boolean },
+    isServing: { type: Boolean, default: false },
     chef: {
-      name: { type: String, },
+      name: { type: String },
       number: { type: Number },
     },
-    isVeg:{type:Boolean,default:false},
+    isVeg: { type: Boolean, default: false },
     categories: [{ type: String }],
     isBrand: { type: Boolean, default: false },
+    autoScheduleEnabled: { type: Boolean, default: false },
+    weeklySchedule: {
+      monday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      tuesday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      wednesday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      thursday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      friday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      saturday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+      sunday: {
+        open: { type: String, default: null },
+        close: { type: String, default: null },
+      },
+    },
   },
   { timestamps: true } // This will automatically add createdAt and updatedAt fields
 );

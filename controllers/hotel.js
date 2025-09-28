@@ -285,13 +285,13 @@ module.exports.toggleDuty = async (req, res) => {
     }
 
     const istNow = moment().tz("Asia/Kolkata"); // current time in IST
-    const isBefore10AM = istNow.hour() < 10;
+    const isBefore11AM = istNow.hour() < 11;
 
-    if (isBefore10AM && !owner.isServing) {
+    if (isBefore11AM && !owner.isServing) {
       return res.status(403).json({
         code: "TOO_EARLY",
         message:
-          "Cannot start serving before 10:00 AM IST as no riders are available.",
+          "Cannot start serving before 11:00 AM IST as no riders are available.",
       });
     }
 
@@ -412,6 +412,132 @@ module.exports.toggleDutyEmergency = async (req, res) => {
     return res.status(500).json({ error: "Internal server error." });
   }
 };
+
+module.exports.getAutoScheduleStatus = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    const owner = await Owner.findById(user_id).select("autoScheduleEnabled");
+
+    if (!owner) {
+      return res.status(404).json({ message: "Owner not found" });
+    }
+
+    res.status(200).json({ autoScheduleEnabled: owner.autoScheduleEnabled });
+  } catch (error) {
+    console.error("Error fetching auto schedule status:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports.toggleAutoScheduleStatus = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    const owner = await Owner.findById(user_id).select("autoScheduleEnabled");
+
+    if (!owner) {
+      return res.status(404).json({ message: "Owner not found" });
+    }
+
+    // Toggle the status
+    owner.autoScheduleEnabled = !owner.autoScheduleEnabled;
+    await owner.save();
+
+    res.status(200).json({
+      message: `Auto schedule is now ${
+        owner.autoScheduleEnabled ? "enabled" : "disabled"
+      }`,
+      autoScheduleEnabled: owner.autoScheduleEnabled,
+    });
+  } catch (error) {
+    console.error("Error toggling auto schedule status:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports.getRestaurantScheduleDetails = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    const owner = await Owner.findById(user_id).select("weeklySchedule");
+
+    if (!owner) {
+      return res.status(404).json({ message: "Owner not found" });
+    }
+
+    res.status(200).json({
+      weeklySchedule: owner.weeklySchedule || {
+        monday: { open: null, close: null },
+        tuesday: { open: null, close: null },
+        wednesday: { open: null, close: null },
+        thursday: { open: null, close: null },
+        friday: { open: null, close: null },
+        saturday: { open: null, close: null },
+        sunday: { open: null, close: null },
+      },
+      message:
+        "Fetching your restaurant schedule. Keep optimizing your business while we handle this!",
+    });
+  } catch (error) {
+    console.error("Error fetching restaurant schedule:", error);
+    res.status(500).json({
+      message:
+        "Server error while fetching schedule. Keep pushing your business forward!",
+    });
+  }
+};
+
+module.exports.updateRestaurantScheduleDetails = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    const { weeklySchedule } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+
+    if (!weeklySchedule || typeof weeklySchedule !== "object") {
+      return res.status(400).json({ message: "Invalid weekly schedule data" });
+    }
+
+    // Find owner
+    const owner = await Owner.findById(user_id);
+    if (!owner) {
+      return res.status(404).json({ message: "Owner not found" });
+    }
+
+    // Merge existing schedule with incoming partial updates
+    owner.weeklySchedule = {
+      ...owner.weeklySchedule, // keep existing days
+      ...weeklySchedule, // overwrite only the days provided
+    };
+
+    await owner.save();
+
+    return res.status(200).json({
+      message: "Weekly schedule updated successfully",
+      weeklySchedule: owner.weeklySchedule,
+    });
+  } catch (error) {
+    console.error("Error updating weekly schedule:", error);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+//Menu Controllers
 
 module.exports.newOrder = async (req, res) => {
   const { hotel_id } = req.body;
