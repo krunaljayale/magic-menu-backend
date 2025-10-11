@@ -1,5 +1,8 @@
 const Category = require("../models/category");
 const GlobalAlert = require("../models/globalAlert");
+const Animation = require("../models/animations");
+const { serviceAreas } = require("../utils/serviceAreas");
+const SplashImage = require("../models/splashImage");
 
 module.exports.category = async (req, res) => {
   let category = await Category.find();
@@ -24,6 +27,35 @@ module.exports.getConfig = async (req, res) => {
   } catch (err) {
     console.error("Error fetching config:", err);
     res.status(500).json({ error: "Failed to load config" });
+  }
+};
+
+module.exports.getServiceAreas = async (req, res) => {
+  try {
+    res.json(serviceAreas);
+  } catch (err) {
+    console.error("Error fetching serviceAreas:", err);
+    res.status(500).json({ error: "Failed to load serviceAreas" });
+  }
+};
+
+module.exports.getActiveAnimations = async (req, res) => {
+  try {
+    const animations = await Animation.find({ isActive: true }).sort({ order: 1 });
+    res.json(animations);
+  } catch (err) {
+    console.error("Error fetching animations:", err);
+    res.status(500).json({ error: "Failed to load animations" });
+  }
+};
+
+module.exports.getSplashImages = async (req, res) => {
+  try {
+    const images = await SplashImage.find({ isActive: true });
+    res.json(images);
+  } catch (err) {
+    console.error("Error fetching images:", err);
+    res.status(500).json({ error: "Failed to load images" });
   }
 };
 
