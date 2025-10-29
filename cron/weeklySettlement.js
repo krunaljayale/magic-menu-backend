@@ -80,8 +80,8 @@ async function generateWeeklySettlements() {
       //   });
       // });
 
-      const commissionRate = 0.1; //0.2
-      const gstRate = 0; //0.18
+      const commissionRate = 0.2; //0.1
+      const gstRate = 0.18; //0
       const commissionAmount = grossRevenue * commissionRate;
       const taxOnCommission = commissionAmount * gstRate;
       const netRevenue =
