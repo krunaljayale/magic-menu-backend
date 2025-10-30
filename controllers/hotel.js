@@ -2134,8 +2134,8 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
 
     const totalOrders = deliveredOrders.length;
 
-    const commissionRate = 0.1;
-    const gstRate = 0.0;
+    const commissionRate = 0.2; //0.1
+    const gstRate = 0.18; //0.0
 
     const commissionAmount = parseFloat(
       (grossRevenue * commissionRate).toFixed(2)
@@ -2159,8 +2159,8 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
       grossRevenue: parseFloat(grossRevenue.toFixed(2)),
       rejectedOrders: rejectedOrders.length,
       rejectedAmount: parseFloat(rejectedAmount.toFixed(2)),
-      commissionRate: 10,
-      taxRate: 0,
+      commissionRate: 20,
+      taxRate: 18,
       commissionAmount,
       taxOnCommission,
       netRevenue,
