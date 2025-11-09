@@ -1301,10 +1301,14 @@ module.exports.getPastOrders = async (req, res) => {
 module.exports.getPastOrderData = async (req, res) => {
   try {
     const { id } = req.params;
-    const removeNull = req.query.removeNull ? String(req.query.removeNull).toLowerCase() === "true" : true;
+    const removeNull = req.query.removeNull
+      ? String(req.query.removeNull).toLowerCase() === "true"
+      : true;
 
     if (!id || !mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid or missing order id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid or missing order id" });
     }
 
     const objectId = new mongoose.Types.ObjectId(id);
@@ -1314,15 +1318,57 @@ module.exports.getPastOrderData = async (req, res) => {
       { $match: { _id: objectId } },
 
       // lookups
-      { $lookup: { from: "owners", localField: "hotel", foreignField: "_id", as: "hotelDoc" } },
-      { $lookup: { from: "riders", localField: "rider", foreignField: "_id", as: "riderDoc" } },
-      { $lookup: { from: "ridermetadatas", localField: "riderMetaData", foreignField: "_id", as: "riderMetaDoc" } },
-      { $lookup: { from: "paymentlogs", localField: "payment", foreignField: "_id", as: "paymentDoc" } },
-      { $lookup: { from: "customers", localField: "customer", foreignField: "_id", as: "customerDoc" } },
+      {
+        $lookup: {
+          from: "owners",
+          localField: "hotel",
+          foreignField: "_id",
+          as: "hotelDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "riders",
+          localField: "rider",
+          foreignField: "_id",
+          as: "riderDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "ridermetadatas",
+          localField: "riderMetaData",
+          foreignField: "_id",
+          as: "riderMetaDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "paymentlogs",
+          localField: "payment",
+          foreignField: "_id",
+          as: "paymentDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "customers",
+          localField: "customer",
+          foreignField: "_id",
+          as: "customerDoc",
+        },
+      },
 
       // unwind items so we can lookup listing for each snapshot listingId (optional enrichment)
       { $unwind: { path: "$items", preserveNullAndEmptyArrays: true } },
-      { $lookup: { from: "listings", localField: "items.listingId", foreignField: "_id", as: "items.listingDoc" } },
+      {
+        $lookup: {
+          from: "listings",
+          localField: "items.listingId",
+          foreignField: "_id",
+          as: "items.listingDoc",
+        },
+      },
       {
         $addFields: {
           "items.listingDoc": {
@@ -1362,9 +1408,9 @@ module.exports.getPastOrderData = async (req, res) => {
       {
         $replaceRoot: {
           newRoot: {
-            $mergeObjects: ["$doc", { items: "$items" }]
-          }
-        }
+            $mergeObjects: ["$doc", { items: "$items" }],
+          },
+        },
       },
 
       // pick single docs
@@ -1374,8 +1420,8 @@ module.exports.getPastOrderData = async (req, res) => {
           riderDoc: { $arrayElemAt: ["$riderDoc", 0] },
           riderMetaDoc: { $arrayElemAt: ["$riderMetaDoc", 0] },
           paymentDoc: { $arrayElemAt: ["$paymentDoc", 0] },
-          customerDoc: { $arrayElemAt: ["$customerDoc", 0] }
-        }
+          customerDoc: { $arrayElemAt: ["$customerDoc", 0] },
+        },
       },
 
       // final projection
@@ -1397,48 +1443,77 @@ module.exports.getPastOrderData = async (req, res) => {
           createdAt: 1,
           updatedAt: 1,
           customerId: "$customerDoc._id",
-          customer: { name: "$customerDoc.name", number: "$customerDoc.number" },
+          customer: {
+            name: "$customerDoc.name",
+            number: "$customerDoc.number",
+          },
           hotel: { hotel: "$hotelDoc.hotel", number: "$hotelDoc.number" },
           rider: { name: "$riderDoc.name", number: "$riderDoc.number" },
           riderMetaData: {
             acceptedAtTime: "$riderMetaDoc.acceptedAtTime",
-            restaurantDistanceAtAccept: "$riderMetaDoc.restaurantDistanceAtAccept",
+            restaurantDistanceAtAccept:
+              "$riderMetaDoc.restaurantDistanceAtAccept",
             customerDistanceAtAccept: "$riderMetaDoc.customerDistanceAtAccept",
             selfieAtRestaurant: "$riderMetaDoc.selfieAtRestaurant",
             reachedRestaurantAt: "$riderMetaDoc.reachedRestaurantAt",
             pickupConfirmedAt: "$riderMetaDoc.pickupConfirmedAt",
-            dropAt: "$riderMetaDoc.dropAt"
+            dropAt: "$riderMetaDoc.dropAt",
           },
-          payment: { transactionId: "$paymentDoc.transactionId", mode: "$paymentDoc.mode", status: "$paymentDoc.status", amount: "$paymentDoc.amount" }
-        }
-      }
+          payment: {
+            transactionId: "$paymentDoc.transactionId",
+            mode: "$paymentDoc.mode",
+            status: "$paymentDoc.status",
+            amount: "$paymentDoc.amount",
+          },
+        },
+      },
     ];
 
     const results = await PastOrder.aggregate(pipeline).allowDiskUse(true);
     if (!results || results.length === 0) {
-      return res.status(404).json({ success: false, message: "Past order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Past order not found" });
     }
 
     const doc = results[0];
 
     // Normalize delivery address -> customer.locationFormatted & map urls
-    const addr = doc.deliveryAddress && typeof doc.deliveryAddress === "object" ? doc.deliveryAddress : null;
+    const addr =
+      doc.deliveryAddress && typeof doc.deliveryAddress === "object"
+        ? doc.deliveryAddress
+        : null;
     const deliveryAddressFormatted = formatLocationObject(addr);
     let deliveryLatLng = null;
-    if (addr && typeof addr === "object" && (addr.latitude !== undefined || addr.longitude !== undefined)) {
-      const lat = addr.latitude !== undefined && addr.latitude !== null ? Number(addr.latitude) : null;
-      const lng = addr.longitude !== undefined && addr.longitude !== null ? Number(addr.longitude) : null;
-      deliveryLatLng = lat !== null && lng !== null ? { latitude: lat, longitude: lng } : null;
+    if (
+      addr &&
+      typeof addr === "object" &&
+      (addr.latitude !== undefined || addr.longitude !== undefined)
+    ) {
+      const lat =
+        addr.latitude !== undefined && addr.latitude !== null
+          ? Number(addr.latitude)
+          : null;
+      const lng =
+        addr.longitude !== undefined && addr.longitude !== null
+          ? Number(addr.longitude)
+          : null;
+      deliveryLatLng =
+        lat !== null && lng !== null ? { latitude: lat, longitude: lng } : null;
     }
-    const deliveryMapUrls = deliveryLatLng ? buildMapUrls(deliveryLatLng.latitude, deliveryLatLng.longitude) : null;
+    const deliveryMapUrls = deliveryLatLng
+      ? buildMapUrls(deliveryLatLng.latitude, deliveryLatLng.longitude)
+      : null;
 
     // Normalize riderMetaData
     const rawRiderMeta = doc.riderMetaData || null;
     const riderMetaDataNormalized = rawRiderMeta
       ? {
           acceptedAtTime: toIsoOrNull(rawRiderMeta.acceptedAtTime),
-          restaurantDistanceAtAccept: rawRiderMeta.restaurantDistanceAtAccept ?? null,
-          customerDistanceAtAccept: rawRiderMeta.customerDistanceAtAccept ?? null,
+          restaurantDistanceAtAccept:
+            rawRiderMeta.restaurantDistanceAtAccept ?? null,
+          customerDistanceAtAccept:
+            rawRiderMeta.customerDistanceAtAccept ?? null,
           selfieAtRestaurant: rawRiderMeta.selfieAtRestaurant ?? null,
           reachedRestaurantAt: toIsoOrNull(rawRiderMeta.reachedRestaurantAt),
           pickupConfirmedAt: toIsoOrNull(rawRiderMeta.pickupConfirmedAt),
@@ -1450,8 +1525,12 @@ module.exports.getPastOrderData = async (req, res) => {
     const mappedItems = Array.isArray(doc.items)
       ? doc.items.map((it) => {
           const listingDoc = it.listingDoc || null;
-          const price = typeof it.price === "number" ? it.price : Number(it.price) || 0;
-          const qty = typeof it.quantity === "number" ? it.quantity : Number(it.quantity) || 0;
+          const price =
+            typeof it.price === "number" ? it.price : Number(it.price) || 0;
+          const qty =
+            typeof it.quantity === "number"
+              ? it.quantity
+              : Number(it.quantity) || 0;
           return {
             name: it.name ?? (listingDoc ? listingDoc.name ?? null : null),
             discountedPrice: price,
@@ -1463,12 +1542,24 @@ module.exports.getPastOrderData = async (req, res) => {
       : [];
 
     const computedTotalFromItems = mappedItems.reduce(
-      (acc, it) => acc + (typeof it.discountedPrice === "number" && typeof it.quantity === "number" ? it.discountedPrice * it.quantity : 0),
+      (acc, it) =>
+        acc +
+        (typeof it.discountedPrice === "number" &&
+        typeof it.quantity === "number"
+          ? it.discountedPrice * it.quantity
+          : 0),
       0
     );
 
     // Normalize timeline dates (ISO)
-    const dateFields = ["orderedAt", "servedAt", "arrivedAt", "deliveredAt", "createdAt", "updatedAt"];
+    const dateFields = [
+      "orderedAt",
+      "servedAt",
+      "arrivedAt",
+      "deliveredAt",
+      "createdAt",
+      "updatedAt",
+    ];
     const timeline = {};
     dateFields.forEach((f) => {
       const v = doc[f];
@@ -1505,17 +1596,23 @@ module.exports.getPastOrderData = async (req, res) => {
         payment: doc.payment ?? null,
         items: mappedItems,
         computedTotalFromItems,
-        totalPriceFromDB: typeof doc.totalPrice === "number" ? doc.totalPrice : null,
+        totalPriceFromDB:
+          typeof doc.totalPrice === "number" ? doc.totalPrice : null,
         remarks: doc.remarks ?? null,
         timeline,
-      }
+      },
     };
 
-    const finalPayload = removeNull ? { success: payload.success, data: cleanObject(payload.data) } : payload;
+    const finalPayload = removeNull
+      ? { success: payload.success, data: cleanObject(payload.data) }
+      : payload;
+
     return res.status(200).json(finalPayload);
   } catch (err) {
     console.error("getPastOrderData error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: err.message });
   }
 };
 

@@ -842,6 +842,37 @@ module.exports.rejectOrder = async (req, res) => {
       })
     );
 
+    let deliveryAddress;
+    try {
+      const locIndex =
+        typeof order.locationIndex === "number"
+          ? order.locationIndex
+          : Number(order.locationIndex); // fallback if it's a string number
+
+      if (
+        order.customer &&
+        Array.isArray(order.customer.location) &&
+        Number.isFinite(locIndex) &&
+        locIndex >= 0 &&
+        order.customer.location[locIndex]
+      ) {
+        const loc = order.customer.location[locIndex];
+        deliveryAddress = {
+          title: loc.title,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          houseNo: loc.houseNo,
+          buildingNo: loc.buildingNo,
+          landmark: loc.landmark,
+        };
+      } else {
+        deliveryAddress = undefined;
+      }
+    } catch (e) {
+      console.log("Error at rejecting order api of hotel: ", e);
+      deliveryAddress = undefined;
+    }
+
     const pastOrder = new PastOrder({
       ticketNumber: order.ticketNumber,
       orderOtp: order.orderOtp,
@@ -851,7 +882,7 @@ module.exports.rejectOrder = async (req, res) => {
       hotel: order.hotel._id,
       rider: order.rider || null,
       payment: order.payment || null,
-      deliveryAddress: order.deliveryAddress || undefined,
+      deliveryAddress: deliveryAddress,
       items: transformedItems,
       remarks: order.remarks,
       orderedAt: order.orderedAt,
@@ -948,7 +979,7 @@ module.exports.readyOrder = async (req, res) => {
   try {
     const updatedOrder = await LiveOrder.findByIdAndUpdate(
       order_id,
-      { restaurantStatus: "READY" },
+      { restaurantStatus: "READY", servedAt: new Date() },
       { new: true }
     ).populate("hotel", "hotel");
 

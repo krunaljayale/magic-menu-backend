@@ -1144,6 +1144,7 @@ module.exports.completeOrder = async (req, res) => {
       items: transformedItems,
       remarks: liveOrder.remarks,
       orderedAt: liveOrder.orderedAt,
+      preparationTime:liveOrder.preparationTime,
       servedAt: liveOrder.servedAt,
       arrivedAt: liveOrder.arrivedAt,
       deliveredAt: liveOrder.deliveredAt,
