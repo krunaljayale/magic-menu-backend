@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const wrapAsync = require("../utils/wrapAsync");
 const authMiddleware = require("../utils/jwtAuth");
-const { settleRestaurantSettlements, registerAdmin, loginAdmin, getRegisteredRiders, getRiderData, editRiderDeposit, toggleBlockRider, getUnsettledOrders, markSettledOrders, getRegisteredRestaurants, getRestaurantData, profileRoute, toggleRestaurantBrand, getWeeklyOrders, getPendingPayouts, payPendingPayout, getPaidPayouts, getLiveOrders, getDashBodardData, getPastOrders, getSearchedOrder, sendPushNotification } = require("../controllers/admin");
+const { settleRestaurantSettlements, registerAdmin, loginAdmin, getRegisteredRiders, getRiderData, editRiderDeposit, toggleBlockRider, getUnsettledOrders, markSettledOrders, getRegisteredRestaurants, getRestaurantData, profileRoute, toggleRestaurantBrand, getWeeklyOrders, getPendingPayouts, payPendingPayout, getPaidPayouts, getLiveOrders, getDashBodardData, getPastOrders, getSearchedOrder, sendPushNotification, getLiveOrderData, getPastOrderData } = require("../controllers/admin");
 
 router.post("/register-admin/:admin_id", wrapAsync(registerAdmin));
 router.post("/login-admin", wrapAsync(loginAdmin));
@@ -36,7 +36,9 @@ router.post("/pay-pending-payout/:id",authMiddleware,wrapAsync(payPendingPayout)
 
 // Orders Details routes
 router.get("/get-live-orders",authMiddleware,wrapAsync(getLiveOrders));
+router.get("/get-live-order-data/:id",authMiddleware,wrapAsync(getLiveOrderData));
 router.get("/get-past-orders",authMiddleware,wrapAsync(getPastOrders));
+router.get("/get-past-order-data/:id",authMiddleware,wrapAsync(getPastOrderData));
 router.get("/get-searched-past-order/:orderID",authMiddleware,wrapAsync(getSearchedOrder));
 
 

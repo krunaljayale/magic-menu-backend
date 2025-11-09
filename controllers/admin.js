@@ -15,6 +15,12 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const moment = require("moment-timezone");
 const admin = require("../config/firebaseAdmin");
+const {
+  cleanObject,
+  buildMapUrls,
+  formatLocationObject,
+  toIsoOrNull,
+} = require("../utils/controllerAPIUtil");
 
 module.exports.registerAdmin = async (req, res) => {
   try {
@@ -837,10 +843,11 @@ module.exports.getLiveOrders = async (req, res) => {
         path: "hotel",
         select: "hotel", // this gives the hotel name from Owner model
       })
-      .select("ticketNumber hotel orderedAt totalPrice orderOtp status");
+      .select("_id ticketNumber hotel orderedAt totalPrice orderOtp status");
 
     const formattedOrders = orders.map((order) => ({
-      orderId: order.ticketNumber,
+      orderId: order._id,
+      orderTicketNumber: order.ticketNumber,
       hotelName: order.hotel?.hotel || "N/A",
       orderedOn: order.orderedAt,
       orderValue: order.totalPrice,
@@ -852,6 +859,402 @@ module.exports.getLiveOrders = async (req, res) => {
   } catch (error) {
     console.error("Error fetching live orders:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+module.exports.getLiveOrderData = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const removeNull = req.query.removeNull
+      ? String(req.query.removeNull).toLowerCase() === "true"
+      : true;
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid or missing order id" });
+    }
+
+    const objectId = new mongoose.Types.ObjectId(id);
+
+    const pipeline = [
+      { $match: { _id: objectId } },
+
+      // owners, riders, riderMeta, payment lookups (unchanged)
+      {
+        $lookup: {
+          from: "owners",
+          localField: "hotel",
+          foreignField: "_id",
+          as: "hotelDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "riders",
+          localField: "rider",
+          foreignField: "_id",
+          as: "riderDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "ridermetadatas",
+          localField: "riderMetaData",
+          foreignField: "_id",
+          as: "riderMetaDoc",
+        },
+      },
+      {
+        $lookup: {
+          from: "paymentlogs",
+          localField: "payment",
+          foreignField: "_id",
+          as: "paymentDoc",
+        },
+      },
+
+      // items unwind + listing lookup
+      { $unwind: { path: "$items", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "listings",
+          localField: "items.item",
+          foreignField: "_id",
+          as: "items.listingDoc",
+        },
+      },
+      {
+        $addFields: {
+          "items.listingDoc": {
+            $cond: [
+              { $gt: [{ $size: "$items.listingDoc" }, 0] },
+              {
+                $arrayElemAt: [
+                  {
+                    $map: {
+                      input: "$items.listingDoc",
+                      as: "l",
+                      in: {
+                        _id: "$$l._id",
+                        name: "$$l.name",
+                        discountedPrice: "$$l.discountedPrice",
+                        category: "$$l.category",
+                        inStock: "$$l.inStock",
+                        isVeg: "$$l.isVeg",
+                      },
+                    },
+                  },
+                  0,
+                ],
+              },
+              null,
+            ],
+          },
+        },
+      },
+
+      // group items back
+      {
+        $group: {
+          _id: "$_id",
+          doc: { $first: "$$ROOT" },
+          items: {
+            $push: {
+              $cond: [
+                { $ifNull: ["$items", false] },
+                { listing: "$items.listingDoc", quantity: "$items.quantity" },
+                "$$REMOVE",
+              ],
+            },
+          },
+        },
+      },
+      {
+        $replaceRoot: {
+          newRoot: { $mergeObjects: ["$doc", { items: "$items" }] },
+        },
+      },
+
+      // lookup customer
+      {
+        $lookup: {
+          from: "customers",
+          localField: "customer",
+          foreignField: "_id",
+          as: "customerDoc",
+        },
+      },
+
+      // compute selected location (if locArr exists and idx valid)
+      {
+        $addFields: {
+          hotelDoc: { $arrayElemAt: ["$hotelDoc", 0] },
+          riderDoc: { $arrayElemAt: ["$riderDoc", 0] },
+          riderMetaDoc: { $arrayElemAt: ["$riderMetaDoc", 0] },
+          paymentDoc: { $arrayElemAt: ["$paymentDoc", 0] },
+          customerDoc: { $arrayElemAt: ["$customerDoc", 0] },
+          customerSelectedLocation: {
+            $let: {
+              vars: {
+                locArr: {
+                  $ifNull: [{ $ifNull: ["$customerDoc.location", []] }, []],
+                },
+                idx: { $ifNull: ["$locationIndex", -1] },
+              },
+              in: {
+                $cond: [
+                  {
+                    $and: [
+                      { $isArray: "$$locArr" },
+                      { $gte: ["$$idx", 0] },
+                      { $lt: ["$$idx", { $size: "$$locArr" }] },
+                    ],
+                  },
+                  { $arrayElemAt: ["$$locArr", "$$idx"] },
+                  null,
+                ],
+              },
+            },
+          },
+        },
+      },
+
+      // project requested fields; also include customerId so controller can fallback
+      {
+        $project: {
+          _id: 1,
+          ticketNumber: 1,
+          orderOtp: 1,
+          status: 1,
+          restaurantStatus: 1,
+          locationIndex: 1,
+          remarks: 1,
+          preparationTime: 1,
+          orderedAt: 1,
+          servedAt: 1,
+          arrivedAt: 1,
+          deliveredAt: 1,
+          totalPrice: 1,
+          createdAt: 1,
+          updatedAt: 1,
+
+          customerId: "$customerDoc._id", // <-- important fallback id
+          customer: {
+            name: "$customerDoc.name",
+            number: "$customerDoc.number",
+            location: "$customerSelectedLocation",
+          },
+
+          hotel: { hotel: "$hotelDoc.hotel", number: "$hotelDoc.number" },
+          rider: { name: "$riderDoc.name", number: "$riderDoc.number" },
+
+          riderMetaData: {
+            acceptedAtTime: "$riderMetaDoc.acceptedAtTime",
+            restaurantDistanceAtAccept:
+              "$riderMetaDoc.restaurantDistanceAtAccept",
+            customerDistanceAtAccept: "$riderMetaDoc.customerDistanceAtAccept",
+            selfieAtRestaurant: "$riderMetaDoc.selfieAtRestaurant",
+            reachedRestaurantAt: "$riderMetaDoc.reachedRestaurantAt",
+            pickupConfirmedAt: "$riderMetaDoc.pickupConfirmedAt",
+            dropAt: "$riderMetaDoc.dropAt",
+          },
+
+          payment: {
+            transactionId: "$paymentDoc.transactionId",
+            mode: "$paymentDoc.mode",
+            status: "$paymentDoc.status",
+            amount: "$paymentDoc.amount",
+          },
+
+          items: 1,
+        },
+      },
+
+      { $addFields: { items: { $ifNull: ["$items", []] } } },
+    ];
+
+    const results = await LiveOrder.aggregate(pipeline).allowDiskUse(true);
+    if (!results || results.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Live order not found" });
+    }
+
+    const doc = results[0];
+
+    // ---------- Normalize customer ----------
+    let normalizedCustomer = null;
+    // attempt to use doc.customer.location (computed by pipeline)
+    let loc =
+      doc.customer && doc.customer.location ? doc.customer.location : null;
+
+    // If pipeline left it as array for some reason, pick by locationIndex (safe)
+    if (Array.isArray(loc)) {
+      const idx =
+        typeof doc.locationIndex === "number" && doc.locationIndex >= 0
+          ? doc.locationIndex
+          : 0;
+      loc = loc.length > idx ? loc[idx] : loc.length > 0 ? loc[0] : null;
+    }
+
+    // If loc is still null, try a fallback DB fetch (only location field) using customerId
+    if ((!loc || loc == null) && doc.customerId) {
+      try {
+        const fullCustomer = await Customer.findById(doc.customerId)
+          .select("location")
+          .lean();
+        if (
+          fullCustomer &&
+          Array.isArray(fullCustomer.location) &&
+          fullCustomer.location.length > 0
+        ) {
+          const idx =
+            typeof doc.locationIndex === "number" && doc.locationIndex >= 0
+              ? doc.locationIndex
+              : 0;
+          loc =
+            fullCustomer.location.length > idx
+              ? fullCustomer.location[idx]
+              : fullCustomer.location[0];
+        }
+      } catch (e) {
+        // swallow fallback error but keep loc null if fetch fails
+        console.warn("customer fallback fetch failed:", e && e.message);
+      }
+    }
+
+    // final safety: ensure object or null
+    if (loc && typeof loc !== "object") loc = null;
+
+    if (doc.customer && (doc.customer.name || doc.customer.number || loc)) {
+      const locationFormatted = formatLocationObject(loc);
+      let locationLatLng = null;
+      if (
+        loc &&
+        typeof loc === "object" &&
+        (loc.latitude !== undefined || loc.longitude !== undefined)
+      ) {
+        const lat =
+          loc.latitude !== undefined && loc.latitude !== null
+            ? Number(loc.latitude)
+            : null;
+        const lng =
+          loc.longitude !== undefined && loc.longitude !== null
+            ? Number(loc.longitude)
+            : null;
+        locationLatLng =
+          lat !== null && lng !== null
+            ? { latitude: lat, longitude: lng }
+            : null;
+      }
+      const locationMapUrls = locationLatLng
+        ? buildMapUrls(locationLatLng.latitude, locationLatLng.longitude)
+        : null;
+
+      normalizedCustomer = {
+        name: doc.customer.name ?? null,
+        number: doc.customer.number ?? null,
+        location: loc ?? null,
+        locationFormatted,
+        locationLatLng,
+        locationMapUrls,
+      };
+    }
+
+    // ---------- Map items ----------
+    const mappedItems = Array.isArray(doc.items)
+      ? doc.items.map((it) => {
+          const listingObj = it.listing || null;
+          return {
+            listingId:
+              listingObj && listingObj._id ? String(listingObj._id) : null,
+            name: listingObj ? listingObj.name ?? null : null,
+            discountedPrice: listingObj
+              ? listingObj.discountedPrice ?? null
+              : null,
+            category: listingObj ? listingObj.category ?? null : null,
+            inStock: listingObj ? listingObj.inStock ?? null : null,
+            isVeg: listingObj ? listingObj.isVeg ?? null : null,
+            quantity: typeof it.quantity === "number" ? it.quantity : 0,
+            subtotal:
+              listingObj &&
+              typeof listingObj.discountedPrice === "number" &&
+              typeof it.quantity === "number"
+                ? listingObj.discountedPrice * it.quantity
+                : null,
+          };
+        })
+      : [];
+
+    const computedTotalFromItems = mappedItems.reduce(
+      (acc, it) => (typeof it.subtotal === "number" ? acc + it.subtotal : acc),
+      0
+    );
+
+    // ---------- Convert timeline dates to ISO ----------
+    const dateFields = [
+      "orderedAt",
+      "servedAt",
+      "arrivedAt",
+      "deliveredAt",
+      "updatedAt",
+      "createdAt",
+    ];
+    const timelineDates = {};
+    dateFields.forEach((f) => {
+      const val = doc[f];
+      if (val instanceof Date) timelineDates[f] = val.toISOString();
+      else if (val != null) {
+        const d = new Date(val);
+        timelineDates[f] = isNaN(d.getTime()) ? null : d.toISOString();
+      } else timelineDates[f] = null;
+    });
+
+    // ---------- Build payload ----------
+    const payload = {
+      success: true,
+      data: {
+        id: String(doc._id),
+        ticketNumber: doc.ticketNumber ?? null,
+        orderOtp: doc.orderOtp ?? null,
+        status: doc.status ?? null,
+        restaurantStatus: doc.restaurantStatus ?? null,
+        customer: normalizedCustomer,
+        hotel: doc.hotel ?? null,
+        rider: doc.rider ?? null,
+        riderMetaData: doc.riderMetaData ?? null,
+        payment: doc.payment ?? null,
+        locationIndex: doc.locationIndex ?? null,
+        remarks: doc.remarks ?? null,
+        items: mappedItems,
+        computedTotalFromItems,
+        totalPriceFromDB:
+          typeof doc.totalPrice === "number" ? doc.totalPrice : null,
+        timeline: {
+          orderedAt: timelineDates.orderedAt,
+          preparationTimeMinutes:
+            typeof doc.preparationTime === "number"
+              ? doc.preparationTime
+              : null,
+          servedAt: timelineDates.servedAt,
+          arrivedAt: timelineDates.arrivedAt,
+          deliveredAt: timelineDates.deliveredAt,
+          updatedAt: timelineDates.updatedAt,
+          createdAt: timelineDates.createdAt,
+        },
+      },
+    };
+
+    const finalPayload = removeNull
+      ? { success: payload.success, data: cleanObject(payload.data) }
+      : payload;
+    return res.status(200).json(finalPayload);
+  } catch (err) {
+    console.error("getLiveOrderData (agg) error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: err.message });
   }
 };
 
@@ -877,7 +1280,8 @@ module.exports.getPastOrders = async (req, res) => {
       .lean();
 
     const formattedOrders = orders.map((order) => ({
-      orderId: order.ticketNumber,
+      orderId: order._id,
+      orderTicketNumber: order.ticketNumber,
       hotelName: order.hotel?.hotel || "N/A",
       orderedOn: order.orderedAt,
       orderValue: order.totalPrice,
@@ -891,6 +1295,227 @@ module.exports.getPastOrders = async (req, res) => {
   } catch (err) {
     console.error("[GET /admin/get-past-orders] Error:", err);
     res.status(500).json({ error: "Failed to fetch past orders" });
+  }
+};
+
+module.exports.getPastOrderData = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const removeNull = req.query.removeNull ? String(req.query.removeNull).toLowerCase() === "true" : true;
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid or missing order id" });
+    }
+
+    const objectId = new mongoose.Types.ObjectId(id);
+
+    // Aggregation: join owner, rider, riderMetaData, payment, customer, and listings for item enrichment
+    const pipeline = [
+      { $match: { _id: objectId } },
+
+      // lookups
+      { $lookup: { from: "owners", localField: "hotel", foreignField: "_id", as: "hotelDoc" } },
+      { $lookup: { from: "riders", localField: "rider", foreignField: "_id", as: "riderDoc" } },
+      { $lookup: { from: "ridermetadatas", localField: "riderMetaData", foreignField: "_id", as: "riderMetaDoc" } },
+      { $lookup: { from: "paymentlogs", localField: "payment", foreignField: "_id", as: "paymentDoc" } },
+      { $lookup: { from: "customers", localField: "customer", foreignField: "_id", as: "customerDoc" } },
+
+      // unwind items so we can lookup listing for each snapshot listingId (optional enrichment)
+      { $unwind: { path: "$items", preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: "listings", localField: "items.listingId", foreignField: "_id", as: "items.listingDoc" } },
+      {
+        $addFields: {
+          "items.listingDoc": {
+            $cond: [
+              { $gt: [{ $size: "$items.listingDoc" }, 0] },
+              { $arrayElemAt: ["$items.listingDoc", 0] },
+              null,
+            ],
+          },
+        },
+      },
+
+      // group back
+      {
+        $group: {
+          _id: "$_id",
+          doc: { $first: "$$ROOT" },
+          items: {
+            $push: {
+              $cond: [
+                { $ifNull: ["$items", false] },
+                {
+                  listingId: "$items.listingId",
+                  name: "$items.name",
+                  price: "$items.price",
+                  quantity: "$items.quantity",
+                  listingDoc: "$items.listingDoc",
+                },
+                "$$REMOVE",
+              ],
+            },
+          },
+        },
+      },
+
+      // re-merge and pick first of lookups
+      {
+        $replaceRoot: {
+          newRoot: {
+            $mergeObjects: ["$doc", { items: "$items" }]
+          }
+        }
+      },
+
+      // pick single docs
+      {
+        $addFields: {
+          hotelDoc: { $arrayElemAt: ["$hotelDoc", 0] },
+          riderDoc: { $arrayElemAt: ["$riderDoc", 0] },
+          riderMetaDoc: { $arrayElemAt: ["$riderMetaDoc", 0] },
+          paymentDoc: { $arrayElemAt: ["$paymentDoc", 0] },
+          customerDoc: { $arrayElemAt: ["$customerDoc", 0] }
+        }
+      },
+
+      // final projection
+      {
+        $project: {
+          _id: 1,
+          ticketNumber: 1,
+          orderOtp: 1,
+          reason: 1,
+          status: 1,
+          remarks: 1,
+          items: 1,
+          deliveryAddress: 1,
+          totalPrice: 1,
+          orderedAt: 1,
+          servedAt: 1,
+          arrivedAt: 1,
+          deliveredAt: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          customerId: "$customerDoc._id",
+          customer: { name: "$customerDoc.name", number: "$customerDoc.number" },
+          hotel: { hotel: "$hotelDoc.hotel", number: "$hotelDoc.number" },
+          rider: { name: "$riderDoc.name", number: "$riderDoc.number" },
+          riderMetaData: {
+            acceptedAtTime: "$riderMetaDoc.acceptedAtTime",
+            restaurantDistanceAtAccept: "$riderMetaDoc.restaurantDistanceAtAccept",
+            customerDistanceAtAccept: "$riderMetaDoc.customerDistanceAtAccept",
+            selfieAtRestaurant: "$riderMetaDoc.selfieAtRestaurant",
+            reachedRestaurantAt: "$riderMetaDoc.reachedRestaurantAt",
+            pickupConfirmedAt: "$riderMetaDoc.pickupConfirmedAt",
+            dropAt: "$riderMetaDoc.dropAt"
+          },
+          payment: { transactionId: "$paymentDoc.transactionId", mode: "$paymentDoc.mode", status: "$paymentDoc.status", amount: "$paymentDoc.amount" }
+        }
+      }
+    ];
+
+    const results = await PastOrder.aggregate(pipeline).allowDiskUse(true);
+    if (!results || results.length === 0) {
+      return res.status(404).json({ success: false, message: "Past order not found" });
+    }
+
+    const doc = results[0];
+
+    // Normalize delivery address -> customer.locationFormatted & map urls
+    const addr = doc.deliveryAddress && typeof doc.deliveryAddress === "object" ? doc.deliveryAddress : null;
+    const deliveryAddressFormatted = formatLocationObject(addr);
+    let deliveryLatLng = null;
+    if (addr && typeof addr === "object" && (addr.latitude !== undefined || addr.longitude !== undefined)) {
+      const lat = addr.latitude !== undefined && addr.latitude !== null ? Number(addr.latitude) : null;
+      const lng = addr.longitude !== undefined && addr.longitude !== null ? Number(addr.longitude) : null;
+      deliveryLatLng = lat !== null && lng !== null ? { latitude: lat, longitude: lng } : null;
+    }
+    const deliveryMapUrls = deliveryLatLng ? buildMapUrls(deliveryLatLng.latitude, deliveryLatLng.longitude) : null;
+
+    // Normalize riderMetaData
+    const rawRiderMeta = doc.riderMetaData || null;
+    const riderMetaDataNormalized = rawRiderMeta
+      ? {
+          acceptedAtTime: toIsoOrNull(rawRiderMeta.acceptedAtTime),
+          restaurantDistanceAtAccept: rawRiderMeta.restaurantDistanceAtAccept ?? null,
+          customerDistanceAtAccept: rawRiderMeta.customerDistanceAtAccept ?? null,
+          selfieAtRestaurant: rawRiderMeta.selfieAtRestaurant ?? null,
+          reachedRestaurantAt: toIsoOrNull(rawRiderMeta.reachedRestaurantAt),
+          pickupConfirmedAt: toIsoOrNull(rawRiderMeta.pickupConfirmedAt),
+          dropAt: toIsoOrNull(rawRiderMeta.dropAt),
+        }
+      : null;
+
+    // Map items: use snapshot fields (name, price, quantity) and enrich from listingDoc if present
+    const mappedItems = Array.isArray(doc.items)
+      ? doc.items.map((it) => {
+          const listingDoc = it.listingDoc || null;
+          const price = typeof it.price === "number" ? it.price : Number(it.price) || 0;
+          const qty = typeof it.quantity === "number" ? it.quantity : Number(it.quantity) || 0;
+          return {
+            name: it.name ?? (listingDoc ? listingDoc.name ?? null : null),
+            discountedPrice: price,
+            quantity: qty,
+            isVeg: listingDoc ? !!listingDoc.isVeg : null,
+            category: listingDoc ? listingDoc.category ?? null : null,
+          };
+        })
+      : [];
+
+    const computedTotalFromItems = mappedItems.reduce(
+      (acc, it) => acc + (typeof it.discountedPrice === "number" && typeof it.quantity === "number" ? it.discountedPrice * it.quantity : 0),
+      0
+    );
+
+    // Normalize timeline dates (ISO)
+    const dateFields = ["orderedAt", "servedAt", "arrivedAt", "deliveredAt", "createdAt", "updatedAt"];
+    const timeline = {};
+    dateFields.forEach((f) => {
+      const v = doc[f];
+      if (v instanceof Date) timeline[f] = v.toISOString();
+      else if (v != null) {
+        const d = new Date(v);
+        timeline[f] = isNaN(d.getTime()) ? null : d.toISOString();
+      } else timeline[f] = null;
+    });
+
+    // Build customer object expected by frontend (use deliveryAddress for location)
+    const customerObj = doc.customer
+      ? {
+          name: doc.customer.name ?? null,
+          number: doc.customer.number ?? null,
+          locationFormatted: deliveryAddressFormatted,
+          locationMapUrls: deliveryMapUrls,
+        }
+      : null;
+
+    // Build payload
+    const payload = {
+      success: true,
+      data: {
+        id: String(doc._id),
+        ticketNumber: doc.ticketNumber ?? null,
+        orderOtp: doc.orderOtp ?? null,
+        reason: doc.reason ?? null,
+        status: doc.status ?? null,
+        customer: customerObj,
+        hotel: doc.hotel ?? null,
+        rider: doc.rider ?? null,
+        riderMetaData: riderMetaDataNormalized,
+        payment: doc.payment ?? null,
+        items: mappedItems,
+        computedTotalFromItems,
+        totalPriceFromDB: typeof doc.totalPrice === "number" ? doc.totalPrice : null,
+        remarks: doc.remarks ?? null,
+        timeline,
+      }
+    };
+
+    const finalPayload = removeNull ? { success: payload.success, data: cleanObject(payload.data) } : payload;
+    return res.status(200).json(finalPayload);
+  } catch (err) {
+    console.error("getPastOrderData error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 
