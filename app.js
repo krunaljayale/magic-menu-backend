@@ -13,6 +13,7 @@ const customerRouter = require("./routes/customer");
 const commonRouter = require("./routes/common");
 const riderRouter = require("./routes/rider");
 const adminRouter = require("./routes/admin");
+const phonepeWebhookRouter = require("./routes/phonepeWebhook");
 
 const app = express();
 app.use(cors({
@@ -32,6 +33,7 @@ app.use("/customer", customerRouter);
 app.use("/common", commonRouter);
 app.use("/rider", riderRouter);
 app.use("/admin", adminRouter);
+app.use("/payment", phonepeWebhookRouter);
 
 // Default route
 app.get("/", (req, res) => {

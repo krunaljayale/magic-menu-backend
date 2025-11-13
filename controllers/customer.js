@@ -4,6 +4,7 @@ const Owner = require("../models/owner");
 const { default: mongoose, set } = require("mongoose");
 const Listing = require("../models/itemListing");
 const LiveOrder = require("../models/liveOrder");
+const DraftOrder = require("../models/draftOrder");
 const Customer = require("../models/customer");
 const Category = require("../models/category");
 const PastOrder = require("../models/pastOrder");
@@ -14,14 +15,26 @@ const GlobalAlert = require("../models/globalAlert");
 const {
   generateTransactionID,
   generateTicket,
+  getPhonePeToken,
+  generateMerchandUserID,
 } = require("../utils/paymentUtils");
 const { calculateDistance } = require("../utils/mapUtils");
-// const { initiatePayment } = require("../utils/paymentHandler");
 const turf = require("@turf/turf");
 const { serviceAreas } = require("../utils/serviceAreas");
 const admin = require("../config/firebaseAdmin");
 const { sendEmail } = require("../utils/brevoEmailSender");
 const { escapeRegex } = require("../utils/utilityHelpers");
+const axios = require("axios");
+const { logError } = require("../utils/logger");
+
+/**
+ * Helpers: exponential backoff wait
+ */
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Constants / config End
 
 module.exports.data = async (req, res) => {
   try {
@@ -1184,124 +1197,546 @@ module.exports.pastOrder = async (req, res) => {
 };
 
 // Payment Route //
+
+// module.exports.paymentInitiate = async (req, res) => {
+//   let session;
+//   try {
+//     const { user_id, sub_Total, orderItems, locationIndex } = req.body;
+//     if (!user_id || !sub_Total || !orderItems || !locationIndex) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "Invalid parameters" });
+//     }
+
+//     const transaction_Id = generateTransactionID();
+//     const merchant_User_Id = generateMerchandUserID();
+//     const ticketNumber = generateTicket();
+//     const orderOtp = generateTicket();
+//     const authToken = await getPhonePeToken();
+
+//     // 1) Get customer (no session yet)
+//     let customer;
+//     try {
+//       customer = await Customer.findById(user_id, { number: 1 });
+//     } catch (err) {
+//       logError("Error at initiate payment api - fetching customer", err);
+//       throw new Error("Failed to fetch customer");
+//     }
+//     if (!customer) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Customer not found" });
+//     }
+
+//     // 2) Create order with PhonePe (do BEFORE opening DB transaction)
+//     const orderPayload = {
+//       merchantOrderId: transaction_Id,
+//       amount: Math.round(Number(sub_Total) * 100), // in paise
+//       expireAfter: 960,
+//       metaInfo: { user_id, mobile: customer.number },
+//       paymentFlow: {
+//         type: "PG_CHECKOUT",
+//       },
+//     };
+
+//     let orderResponse;
+//     try {
+//       orderResponse = await axios.post(
+//         "https://api.phonepe.com/apis/pg/checkout/v2/sdk/order",
+//         orderPayload,
+//         {
+//           headers: {
+//             accept: "application/json",
+//             "Content-Type": "application/json",
+//             Authorization: `O-Bearer ${authToken}`,
+//           },
+//           timeout: 10000, // 10 seconds
+//         }
+//       );
+//     } catch (err) {
+//       logError(
+//         "Error at initiate payment api - PhonePe order request failed",
+//         err
+//       );
+//       return res
+//         .status(502)
+//         .json({ success: false, message: "Payment gateway error" });
+//     }
+
+//     // 3) Validate PhonePe response
+//     if (
+//       orderResponse.status !== 200 ||
+//       !orderResponse.data ||
+//       !orderResponse.data.orderId ||
+//       !orderResponse.data.token
+//     ) {
+//       logError(
+//         "Error at initiate payment api - invalid orderResponse shape",
+//         orderResponse
+//       );
+//       return res.status(502).json({
+//         success: false,
+//         message: "Invalid response from payment gateway",
+//       });
+//     }
+
+//     // 4) Start DB transaction AFTER external call succeeds
+//     session = await mongoose.startSession();
+//     session.startTransaction();
+
+//     let payment_Data;
+//     try {
+//       payment_Data = await PaymentLog.create(
+//         [
+//           {
+//             transactionId: transaction_Id,
+//             merchantUserId: merchant_User_Id,
+//             mode: "ONLINE",
+//             status: "PENDING", // initial mapped status
+//             customer: user_id,
+//             amount: Number(sub_Total), // rupees, if you prefer canonical, use amountInPaise field too
+//             phonepeOrderId: orderResponse.data.orderId,
+//             phonepeToken: orderResponse.data.token,
+//             phonepeState: orderResponse.data.state,
+//           },
+//         ],
+//         { session }
+//       );
+//     } catch (err) {
+//       logError("Error at initiate payment api - creating PaymentLog", err);
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res
+//         .status(500)
+//         .json({ success: false, message: "Database error creating payment" });
+//     }
+
+//     const payment_Id = payment_Data[0]._id;
+
+//     const orderData = {
+//       ticketNumber,
+//       orderOtp,
+//       customer: user_id,
+//       hotel: orderItems[0].restaurantId,
+//       payment: payment_Id,
+//       locationIndex,
+//       items: orderItems.map((i) => ({ item: i._id, quantity: i.quantity })),
+//       totalPrice: Number(sub_Total),
+//     };
+//     // we should also send remarks if user want to send it
+
+//     await DraftOrder.create([orderData], { session });
+
+//     // commit and end session
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     const sdkPayload = {
+//       orderId: orderResponse.data.orderId, // per SDK docs
+//       merchantId: process.env.PHONEPE_MERCHANT_ID,
+//       token: orderResponse.data.token,
+//       paymentMode: { type: "PAY_PAGE" },
+//     };
+
+//     const metaDataPayload = {
+//       payment_Id,
+//       payment_Environment: process.env.PHONEPE_ENVIRONMENT,
+//       merchantId: process.env.PHONEPE_MERCHANT_ID,
+//       payment_Flow_Id: merchant_User_Id,
+//       payment_Enable_Logging:
+//         String(process.env.PHONEPE_ENABLE_LOGGING).toLowerCase() === "true",
+//       payment_Callback_Url: process.env.PHONEPE_CALLBACK_URL,
+//     };
+
+//     return res.status(200).json({ meta: metaDataPayload, sdk: sdkPayload });
+//   } catch (error) {
+//     // top-level error catch
+//     try {
+//       if (session) {
+//         await session.abortTransaction();
+//         session.endSession();
+//       }
+//     } catch (e) {
+//       logError("Error at initiate payment api - aborting session failed", e);
+//     }
+//     logError("Error at initiate payment api - unexpected error", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || "Internal server error",
+//     });
+//   }
+// };
+
 module.exports.paymentInitiate = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  let session;
   try {
-    const { user_id, sub_Total } = req.body;
-    const transaction_Id = generateTransactionID();
+    const { user_id, sub_Total, orderItems, locationIndex } = req.body;
 
-    const customer = await Customer.findById(user_id, { number: 1 }).session(
-      session
-    );
-    if (!customer) throw new Error("Customer not found");
-
-    const payment_Data = await PaymentLog.create(
-      [
-        {
-          transactionId: transaction_Id,
-          status: "PENDING",
-          customer: user_id,
-          amount: sub_Total,
-          mode: "ONLINE",
-        },
-      ],
-      { session }
-    );
-
-    await session.commitTransaction();
-    session.endSession();
-
-    const payment_Id = payment_Data[0]._id;
-
-    return res.json({
-      status: 200,
-      payment_Id,
-      merchant_Id: process.env.PHONEPE_MERCHANT_ID,
-      transaction_Id,
-      merchant_User_Id: process.env.PHONEPE_USER_ID,
-      mobile_Number: customer.number,
-      environment: process.env.PHONEPE_ENVIRONMENT,
-      salt_Index: process.env.PHONEPE_SALT_INDEX,
-      salt_Key: process.env.PHONEPE_SALT_KEY,
-      callback_Url: process.env.PHONEPE_CALLBACK_URL,
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    console.log("Error at payment initiate route:", error);
-    res.status(500).json({ error: error.message });
-  }
-};
-
-module.exports.paymentConfirm = async (req, res) => {
-  const session = await mongoose.startSession();
-  try {
-    const { user_id, orderItems, paymentId, locationIndex, amount } = req.body;
     if (
       !user_id ||
-      !orderItems?.length ||
-      !paymentId ||
-      locationIndex == null ||
-      !amount
+      typeof sub_Total === "undefined" ||
+      !orderItems ||
+      typeof locationIndex !== "number"
     ) {
       return res
         .status(400)
-        .json({ status: "Failure", message: "Missing required fields" });
+        .json({ success: false, message: "Invalid parameters" });
     }
 
-    // 1. Update payment status
-    const paymentRecord = await PaymentLog.findByIdAndUpdate(
-      paymentId,
-      { status: "SUCCESS" },
-      { new: true }
-    );
-
-    if (!paymentRecord) {
-      return res.status(404).json({
-        status: "Failure",
-        message: `Payment record not found: ${paymentId}`,
+    // Basic orderItems validation
+    if (!Array.isArray(orderItems) || orderItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "orderItems must be a non-empty array",
+      });
+    }
+    // Ensure all items belong to same restaurant
+    const restaurantId = orderItems[0].restaurantId;
+    if (
+      !orderItems.every(
+        (it) => String(it.restaurantId) === String(restaurantId)
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "All items must belong to the same restaurant",
       });
     }
 
-    session.startTransaction();
+    // Ensure numeric subtotal
+    const subTotalNumber = Number(sub_Total);
+    if (Number.isNaN(subTotalNumber) || subTotalNumber <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid sub_Total" });
+    }
 
-    // 2. Create live order
+    const transaction_Id = generateTransactionID();
+    const merchant_User_Id = generateMerchandUserID();
     const ticketNumber = generateTicket();
     const orderOtp = generateTicket();
+
+    // 1) Get customer (no session yet)
+    let customer;
+    try {
+      customer = await Customer.findById(user_id, { number: 1 });
+    } catch (err) {
+      logError("Error at initiate payment api - fetching customer", err);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch customer" });
+    }
+    if (!customer) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
+    }
+
+    // 2) Get PhonePe token
+    let authToken;
+    try {
+      authToken = await getPhonePeToken();
+      if (!authToken) throw new Error("Empty PhonePe auth token");
+    } catch (err) {
+      logError("Error at initiate payment api - getting PhonePe token", err);
+      return res
+        .status(502)
+        .json({ success: false, message: "Payment gateway auth error" });
+    }
+
+    // 3) Create order on PhonePe (do BEFORE DB transaction)
+    const amountInPaise = Math.round(subTotalNumber * 100);
+    const orderPayload = {
+      merchantOrderId: transaction_Id,
+      amount: amountInPaise, // paise
+      expireAfter: 960,
+      metaInfo: { user_id, mobile: customer.number },
+      paymentFlow: { type: "PG_CHECKOUT" },
+    };
+
+    let orderResponse;
+    try {
+      //https://api.phonepe.com/apis/pg/checkout/v2/sdk/order
+      orderResponse = await axios.post(
+        "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/sdk/order",
+        orderPayload,
+        {
+          headers: {
+            accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `O-Bearer ${authToken}`,
+          },
+          timeout: 10000,
+        }
+      );
+    } catch (err) {
+      logError(
+        "Error at initiate payment api - PhonePe order request failed",
+        err
+      );
+      return res
+        .status(502)
+        .json({ success: false, message: "Payment gateway error" });
+    }
+
+    // 4) Validate PhonePe response shape
+    if (
+      !orderResponse ||
+      orderResponse.status !== 200 ||
+      !orderResponse.data ||
+      !orderResponse.data.orderId ||
+      !orderResponse.data.token
+    ) {
+      logError(
+        "Error at initiate payment api - invalid orderResponse shape",
+        orderResponse && orderResponse.data ? orderResponse.data : orderResponse
+      );
+      return res.status(502).json({
+        success: false,
+        message: "Invalid response from payment gateway",
+      });
+    }
+
+    // 5) Start DB transaction AFTER external call succeeds
+    session = await mongoose.startSession();
+    session.startTransaction();
+
+    // Create PaymentLog
+    let payment_Data;
+    try {
+      payment_Data = await PaymentLog.create(
+        [
+          {
+            transactionId: transaction_Id,
+            merchantUserId: merchant_User_Id,
+            mode: "ONLINE",
+            status: "PENDING",
+            customer: user_id,
+            amount: subTotalNumber, // rupees
+            amountInPaise, // paise
+            phonepeOrderId: orderResponse.data.orderId,
+            phonepeToken: orderResponse.data.token,
+            phonepeState: orderResponse.data.state,
+          },
+        ],
+        { session }
+      );
+    } catch (err) {
+      logError("Error at initiate payment api - creating PaymentLog", err);
+      await session.abortTransaction();
+      session.endSession();
+      return res
+        .status(500)
+        .json({ success: false, message: "Database error creating payment" });
+    }
+
+    const payment_Id = payment_Data[0]._id;
+
+    // Build DraftOrder data (use server calced totalPrice)
     const orderData = {
       ticketNumber,
       orderOtp,
       customer: user_id,
+      hotel: restaurantId,
+      payment: payment_Id,
       locationIndex,
-      hotel: orderItems[0].restaurantId,
       items: orderItems.map((i) => ({ item: i._id, quantity: i.quantity })),
-      totalPrice: amount,
-      payment: paymentId,
+      totalPrice: subTotalNumber,
     };
-    const [createdOrder] = await LiveOrder.create([orderData], { session });
 
+    // Create DraftOrder with duplicate-key handling
+    try {
+      await DraftOrder.create([orderData], { session });
+    } catch (err) {
+      // duplicate key on unique payment field (11000) - handle gracefully
+      if (err && err.code === 11000) {
+        logError("Duplicate DraftOrder for payment - possible retry", err);
+        // rollback and return existing payment id so client can continue (or choose to return 409)
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(409).json({
+          success: false,
+          message: "Draft order already exists for this payment",
+        });
+      } else {
+        logError("Error at initiate payment api - creating DraftOrder", err);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Database error creating draft order",
+        });
+      }
+    }
+
+    // commit and end session
     await session.commitTransaction();
     session.endSession();
 
-    const { getIO } = require("../socket"); // Adjust path if needed
-    const io = getIO();
+    // Prepare response payloads
+    const sdkPayload = {
+      orderId: orderResponse.data.orderId,
+      merchantId: process.env.PHONEPE_MERCHANT_ID,
+      token: orderResponse.data.token,
+      paymentMode: { type: "PAY_PAGE" },
+    };
 
-    io.to(`restaurant-${orderData.hotel}`).emit("orderRefresh");
+    const metaDataPayload = {
+      payment_Id,
+      payment_Environment: process.env.PHONEPE_ENVIRONMENT,
+      merchantId: process.env.PHONEPE_MERCHANT_ID,
+      payment_Flow_Id: merchant_User_Id,
+      payment_Enable_Logging:
+        String(process.env.PHONEPE_ENABLE_LOGGING).toLowerCase() === "true",
+      payment_Callback_Url: process.env.PHONEPE_CALLBACK_URL,
+    };
 
-    io.to(`restaurant-${orderData.hotel}`).emit("orderRefresh");
+    return res.status(200).json({ meta: metaDataPayload, sdk: sdkPayload });
+  } catch (error) {
+    // top-level error catch ensures session abort
+    try {
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
+    } catch (e) {
+      logError("Error at initiate payment api - aborting session failed", e);
+    }
+    logError("Error at initiate payment api - unexpected error", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};
 
+// module.exports.paymentConfirm = async (req, res) => {
+//   const session = await mongoose.startSession();
+//   try {
+//     const { user_id, orderItems, paymentId, locationIndex, amount } = req.body;
+//     if (
+//       !user_id ||
+//       !orderItems?.length ||
+//       !paymentId ||
+//       locationIndex == null ||
+//       !amount
+//     ) {
+//       return res
+//         .status(400)
+//         .json({ status: "Failure", message: "Missing required fields" });
+//     }
+
+//     // 1. Update payment status
+//     const paymentRecord = await PaymentLog.findByIdAndUpdate(
+//       paymentId,
+//       { status: "SUCCESS" },
+//       { new: true }
+//     );
+
+//     if (!paymentRecord) {
+//       return res.status(404).json({
+//         status: "Failure",
+//         message: `Payment record not found: ${paymentId}`,
+//       });
+//     }
+
+//     session.startTransaction();
+
+//     // 2. Create live order
+//     const ticketNumber = generateTicket();
+//     const orderOtp = generateTicket();
+//     const orderData = {
+//       ticketNumber,
+//       orderOtp,
+//       customer: user_id,
+//       locationIndex,
+//       hotel: orderItems[0].restaurantId,
+//       items: orderItems.map((i) => ({ item: i._id, quantity: i.quantity })),
+//       totalPrice: amount,
+//       payment: paymentId,
+//     };
+//     const [createdOrder] = await LiveOrder.create([orderData], { session });
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     const { getIO } = require("../socket"); // Adjust path if needed
+//     const io = getIO();
+
+//     io.to(`restaurant-${orderData.hotel}`).emit("orderRefresh");
+
+//     io.to(`restaurant-${orderData.hotel}`).emit("orderRefresh");
+
+//     return res.status(200).json({
+//       status: "SUCCESS",
+//       id: createdOrder._id,
+//       message: "Order placed and riders notified",
+//     });
+//   } catch (err) {
+//     await session.abortTransaction();
+//     session.endSession();
+//     console.error("Transaction aborted, error:", err);
+//     return res.status(500).json({ status: "Failure", message: err.message });
+//   }
+// };
+
+module.exports.paymentConfirm = async (req, res) => {
+  try {
+    const { payment_id } = req.params;
+
+    // 1️⃣ Find PaymentLog by MongoDB _id
+    const paymentLog = await PaymentLog.findById(payment_id);
+
+    if (!paymentLog) {
+      return res.status(200).json({
+        success: false,
+        paymentStatus: "PENDING", // let app keep polling
+      });
+    }
+
+    // 2️⃣ Check payment status in DB
+    if (paymentLog.status === "SUCCESS") {
+      // 3️⃣ Find LiveOrder connected to this payment
+      const liveOrder = await LiveOrder.findOne({
+        payment: payment_id,
+      });
+
+      // Order not created yet → still pending for app
+      if (!liveOrder) {
+        return res.status(200).json({
+          success: true,
+          paymentStatus: "PENDING",
+        });
+      }
+
+      // Success + order exists → frontend can redirect
+      return res.status(200).json({
+        success: true,
+        paymentStatus: "SUCCESS",
+        live_order_id: liveOrder._id.toString(),
+      });
+    }
+
+    // 4️⃣ Explicit failure
+    if (paymentLog.status === "FAILURE") {
+      return res.status(200).json({
+        success: false,
+        paymentStatus: "FAILED",
+      });
+    }
+
+    // 5️⃣ Any other state (PENDING, NOT_COLLECTED, etc.)
     return res.status(200).json({
-      status: "SUCCESS",
-      id: createdOrder._id,
-      message: "Order placed and riders notified",
+      success: true,
+      paymentStatus: "PENDING",
     });
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error("Transaction aborted, error:", err);
-    return res.status(500).json({ status: "Failure", message: err.message });
+    console.log("Payment confirm error:", err);
+    return res.status(500).json({
+      success: false,
+      paymentStatus: "PENDING",
+      message: "Server error while checking payment",
+    });
   }
 };
 
@@ -1353,10 +1788,12 @@ module.exports.codOrderConfirm = async (req, res) => {
 
     // 1. Create a PaymentLog entry with SUCCESS (COD)
     const transactionId = generateTransactionID();
+    const merchant_User_Id = generateMerchandUserID();
     const [paymentLog] = await PaymentLog.create(
       [
         {
           transactionId,
+          merchantUserId: merchant_User_Id,
           status: "NOT_COLLECTED",
           customer: user_id,
           amount,

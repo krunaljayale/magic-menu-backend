@@ -6,7 +6,7 @@ const PaymentLog = require("../models/paymentLog");
 cron.schedule("*/5 * * * *", async () => {
   console.log("Checking pending payments...");
 
-  const pendingPayments = await PaymentLog.find({ status: "PENDING" });
+  const pendingPayments = await PaymentLog.find({ status: "PENDING",mode:"ONLINE" });
 
   for (const payment of pendingPayments) {
     try {
