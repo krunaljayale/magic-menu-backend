@@ -34,11 +34,22 @@ const draftOrderSchema = new Schema(
     remarks: { type: String },
     totalPrice: { type: Number, required: true },
   },
-  { timestamps: true }
+  { timestamps: true } // This automatically adds 'createdAt'
 );
 
-// Index for optimized queries on customer, hotel, and ticketNumber
+// Index for optimized queries
 draftOrderSchema.index({ customer: 1, hotel: 1, ticketNumber: 1 });
+
+// --- ADD THIS SECTION ---
+// TTL Index to expire ALL documents after 24 hours
+// 86400 seconds = 24 hours
+draftOrderSchema.index(
+  { createdAt: 1 }, // Index the 'createdAt' field
+  {
+    expireAfterSeconds: 86400, // Expire after 24 hours
+  }
+);
+// --- END OF ADDED SECTION ---
 
 const DraftOrder = mongoose.model("DraftOrder", draftOrderSchema);
 module.exports = DraftOrder;

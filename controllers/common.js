@@ -280,7 +280,8 @@ module.exports.sendTestNotification = async (req, res) => {
         "dIRRQBPnRxePkknfKB62_w:APA91bFKUbO04uT5qw6kS95Dt1Zuog-K3hPkQpfNGsardjOG0exohVglcdPcOvIV1H4ulmx7ahlSTKkk7CseZYZ06UWM2eLoGLRnqRbiKpg0ZETAiP7JXV0",
         "dD_zD21eRsGsxwKH-N4OOn:APA91bGZPKRWR6cRCEyah7sWdatTIqCbexu369OFBeD6sByZ5fSjeiSRn4zvp_SLCg1wWLWEDV7o6Cn2z7yOs4o41gzTIfXhCVqYwzOifHzj9e4GwkUwaaU",
         "eg5PG3P2R1S75I-m0srVyy:APA91bGHeKfj3gWBWRj5OVDW3Sq5LHSWSwpCPDGEA1dQovkYaSIhnY9rvx606upuqUDdcbc9nFNhnc7xhgullPxe-LvFv0NPdyadeO0l4rViQbUttM0E84E",
-        "cW1KVwBTS7auqzugfq0TYl:APA91bFqAFBElhEz4-KbyDT0HcuKj6gqquLKvSGnr_hm5uTXiX84-l1Rqe6ep5rCA0I7GEwjfGVrGR0F7EOMP2pO2dPo13llGdHHlS9tG1gsC7AfRdqFJCU","cIM8NoroTiW7piBCodfQtf:APA91bHAAw2DuPX8KV1nS-X9wXIhYjrqhXucB7e_cgRFD_tlk025pU_Vkt9pKgwn2K3U0jxJTlfTSbvEkV3hszUxgkAyT0dfE09tYMrzLKXFdxNm5X84Iuo"
+        "cW1KVwBTS7auqzugfq0TYl:APA91bFqAFBElhEz4-KbyDT0HcuKj6gqquLKvSGnr_hm5uTXiX84-l1Rqe6ep5rCA0I7GEwjfGVrGR0F7EOMP2pO2dPo13llGdHHlS9tG1gsC7AfRdqFJCU",
+        "cIM8NoroTiW7piBCodfQtf:APA91bHAAw2DuPX8KV1nS-X9wXIhYjrqhXucB7e_cgRFD_tlk025pU_Vkt9pKgwn2K3U0jxJTlfTSbvEkV3hszUxgkAyT0dfE09tYMrzLKXFdxNm5X84Iuo",
       ],
     };
 
@@ -355,17 +356,21 @@ module.exports.sendTestNotification = async (req, res) => {
   }
 };
 
-module.exports.sendPushNoti = async(req,res) => {
-  const customer = await Customer.findOne({number:9999999999})
-      await sendPushNotification(customer.fcmToken, {
-        title: "Order Confirmed: Preparation Starts 👨‍🍳",
-        body: "Your grub is being prepared! We'll notify you once our delivery partner picks it up. 🏍️",
-        image:"https://res.cloudinary.com/dcgskimn8/image/upload/v1751294918/Delivery_Boy_1_tf3ynj.jpg",
-        android: {
-          channelId: "custom-sound-channel",
-          sound: "magicmenu_zing_enhanced",
-        },
-      });
+module.exports.sendPushNoti = async (req, res) => {
+  const customer = await Customer.findOne({ number: 9284454408 });
+  const result = await sendPushNotification(customer.fcmToken, {
+    title: "Nisha, Abhishek I love you❤️",
+    body: "Your grub is being prepared! We'll notify you once our delivery partner picks it up. 🏍️",
+    image:
+      "https://res.cloudinary.com/dcgskimn8/image/upload/v1758391222/rider_preset/bkckc6pneo8jm6n3weav.jpg",
 
-      res.send(200)
-}
+    android: {
+      channelId: "custom-sound-channel",
+      sound: "magicmenu_zing_enhanced",
+    },
+  });
+
+  res.status(200).json(result);
+};
+
+// "https://res.cloudinary.com/dcgskimn8/image/upload/v1751294918/Delivery_Boy_1_tf3ynj.jpg",

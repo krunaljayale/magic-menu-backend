@@ -26,6 +26,7 @@ const { sendEmail } = require("../utils/brevoEmailSender");
 const { escapeRegex } = require("../utils/utilityHelpers");
 const axios = require("axios");
 const { logError } = require("../utils/logger");
+const { isAfterCutoffIST } = require("../utils/timeUtil");
 
 /**
  * Helpers: exponential backoff wait
@@ -366,6 +367,10 @@ module.exports.hotelData = async (req, res) => {
     // ✅ Display values (always ≥ 1 km and 10 min)
     hotelData.distance = rawDistance.toFixed(2);
     hotelData.estimatedTime = Math.max(10, Math.round(rawTime));
+
+    if (isAfterCutoffIST()) {
+      hotelData.isCODAvailable = false;
+    }
 
     res.send(hotelData);
   } catch (error) {
@@ -1370,7 +1375,9 @@ module.exports.pastOrder = async (req, res) => {
 module.exports.paymentInitiate = async (req, res) => {
   let session;
   try {
-    const { user_id, sub_Total, orderItems, locationIndex } = req.body;
+    const { user_id, sub_Total, orderItems, locationIndex, cartRemark } =
+      req.body;
+    console.log("Cart Remark: ", cartRemark);
 
     if (
       !user_id ||
@@ -1542,6 +1549,7 @@ module.exports.paymentInitiate = async (req, res) => {
       locationIndex,
       items: orderItems.map((i) => ({ item: i._id, quantity: i.quantity })),
       totalPrice: subTotalNumber,
+      remarks: cartRemark,
     };
 
     // Create DraftOrder with duplicate-key handling
@@ -1776,7 +1784,7 @@ module.exports.liveOrderCancel = async (req, res) => {
 module.exports.codOrderConfirm = async (req, res) => {
   const session = await mongoose.startSession();
   try {
-    const { user_id, orderItems, locationIndex, amount } = req.body;
+    const { user_id, orderItems, locationIndex, amount, cartRemark } = req.body;
 
     if (!user_id || !orderItems?.length || locationIndex == null || !amount) {
       return res
@@ -1816,6 +1824,7 @@ module.exports.codOrderConfirm = async (req, res) => {
       totalPrice: amount,
       payment: paymentLog._id,
       paymentMode: "COD",
+      remarks: cartRemark,
     };
 
     const [createdOrder] = await LiveOrder.create([orderData], { session });

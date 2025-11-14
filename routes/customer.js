@@ -72,7 +72,6 @@ router.get("/:id/cancel/live-order", authMiddleware, wrapAsync(liveOrderCancel))
 // Payment Router
 router.post("/payment/initiate",authMiddleware,wrapAsync(paymentInitiate));
 router.get("/payment/confirm/:payment_id",authMiddleware,wrapAsync(paymentConfirm)); // Also customer order api 
-// router.post("/payment/webhook",authMiddleware,wrapAsync(paymentWebhook));
 router.post("/COD/order-confirm",authMiddleware,wrapAsync(codOrderConfirm)); // Customer COD order api 
 
 

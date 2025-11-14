@@ -26,6 +26,8 @@ const ownerSchema = new Schema(
       number: { type: Number },
     },
     isVeg: { type: Boolean, default: false },
+    isCODAvailable: { type: Boolean, default: false },
+    freeDeliveryMOV: { type: Number, default: 300 },
     categories: [{ type: String }],
     isBrand: { type: Boolean, default: false },
     autoScheduleEnabled: { type: Boolean, default: false },

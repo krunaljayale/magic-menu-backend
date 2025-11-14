@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const wrapAsync = require("../utils/wrapAsync");
-const { category, auth, getConfig, checkAlert, getAlert, getServiceAreas, getActiveAnimations, getSplashImages, sendHardcodedNotification, sendTestNotification, sendPushNoti } = require("../controllers/common");
+const { category, auth, getConfig, checkAlert, getAlert, getServiceAreas, getActiveAnimations, getSplashImages, sendTestNotification, sendPushNoti } = require("../controllers/common");
 const authMiddleware = require("../utils/jwtAuth");
 
 
