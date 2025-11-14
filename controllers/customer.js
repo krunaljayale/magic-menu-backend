@@ -1463,9 +1463,9 @@ module.exports.paymentInitiate = async (req, res) => {
 
     let orderResponse;
     try {
-      //https://api.phonepe.com/apis/pg/checkout/v2/sdk/order
+      //https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/sdk/order
       orderResponse = await axios.post(
-        "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/sdk/order",
+        "https://api.phonepe.com/apis/pg/checkout/v2/sdk/order",
         orderPayload,
         {
           headers: {
