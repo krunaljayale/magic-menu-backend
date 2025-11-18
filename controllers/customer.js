@@ -1384,7 +1384,7 @@ module.exports.paymentInitiate = async (req, res) => {
   try {
     const { user_id, sub_Total, orderItems, locationIndex, cartRemark } =
       req.body;
-    console.log("Cart Remark: ", cartRemark);
+    // console.log("Cart Remark: ", cartRemark);
 
     if (
       !user_id ||
@@ -1605,6 +1605,8 @@ module.exports.paymentInitiate = async (req, res) => {
         String(process.env.PHONEPE_ENABLE_LOGGING).toLowerCase() === "true",
       payment_Callback_Url: process.env.PHONEPE_CALLBACK_URL,
     };
+
+    // console.log("Response Sent.")
 
     return res.status(200).json({ meta: metaDataPayload, sdk: sdkPayload });
   } catch (error) {

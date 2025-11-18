@@ -80,8 +80,8 @@ async function generateWeeklySettlements() {
       //   });
       // });
 
-      const commissionRate = 0.2; //0.1
-      const gstRate = 0.18; //0
+      const commissionRate = hotel.commissionRate; //0.2
+      const gstRate = hotel.gstRate; //0.18
       const commissionAmount = grossRevenue * commissionRate;
       const taxOnCommission = commissionAmount * gstRate;
       const netRevenue =
@@ -92,11 +92,11 @@ async function generateWeeklySettlements() {
         weekStart: weekStart.toDate(),
         weekEnd: weekEnd.toDate(),
         totalOrders: orders.length,
-        rejectedOrders:rejectedOrders.length,
+        rejectedOrders: rejectedOrders.length,
         grossRevenue: parseFloat(grossRevenue.toFixed(2)),
         commissionAmount: parseFloat(commissionAmount.toFixed(2)),
         taxOnCommission: parseFloat(taxOnCommission.toFixed(2)),
-        deductions:deductions,
+        deductions: deductions,
         netRevenue: parseFloat(netRevenue.toFixed(2)),
         generatedAt: now.toDate(),
         status: "PENDING",

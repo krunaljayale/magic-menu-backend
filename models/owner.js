@@ -30,6 +30,20 @@ const ownerSchema = new Schema(
     freeDeliveryMOV: { type: Number, default: 300 },
     categories: [{ type: String }],
     isBrand: { type: Boolean, default: false },
+    commissionRate: {
+      type: Number,
+      required: true,
+      default: 0.2,
+      min: 0,
+      max: 1,
+    },
+    gstRate: {
+      type: Number,
+      required: true,
+      default: 0.18,
+      min: 0,
+      max: 1,
+    },
     autoScheduleEnabled: { type: Boolean, default: false },
     weeklySchedule: {
       monday: {
