@@ -368,16 +368,16 @@ module.exports.hotelData = async (req, res) => {
     hotelData.distance = rawDistance.toFixed(2);
     hotelData.estimatedTime = Math.max(10, Math.round(rawTime));
 
-    if (hotelData.isCODAvailable) {
-      const hasDeliveredPastOrder = await PastOrder.exists({
-        customer: _id,
-        status: "DELIVERED",
-      });
+   // if (hotelData.isCODAvailable) {
+      //const hasDeliveredPastOrder = await PastOrder.exists({
+       // customer: _id,
+       // status: "DELIVERED",
+     // });
 
-      if (!hasDeliveredPastOrder || isAfterCutoffIST()) {
-        hotelData.isCODAvailable = false;
-      }
-    }
+      //if (!hasDeliveredPastOrder || isAfterCutoffIST()) {
+        //hotelData.isCODAvailable = false;
+      //}
+    //}
 
     res.send(hotelData);
   } catch (error) {
