@@ -180,8 +180,8 @@ module.exports.sendPushNotification = async (req, res) => {
         notification: {
           title,
           body: message,
-          sound: "magicmenu_zing_enhanced",
-          channelId: "custom-sound-channel",
+        //  sound: "magicmenu_zing_enhanced",
+         // channelId: "custom-sound-channel",
         },
       },
       data: {
