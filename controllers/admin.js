@@ -1277,6 +1277,10 @@ module.exports.getPastOrders = async (req, res) => {
         path: "rider",
         select: "name",
       })
+      .populate({
+        path: "payment",
+        select: "status mode",
+      })
       .lean();
 
     const formattedOrders = orders.map((order) => ({
@@ -1287,6 +1291,8 @@ module.exports.getPastOrders = async (req, res) => {
       orderValue: order.totalPrice,
       riderName: order.rider?.name || "Unassigned",
       status: order.status,
+      paymentStatus: order.payment?.status,
+      paymentMode: order.payment?.mode,
     }));
 
     res.status(200).json({
