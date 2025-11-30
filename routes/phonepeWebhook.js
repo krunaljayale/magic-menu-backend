@@ -155,6 +155,10 @@ router.post("/webhook/phonepe", express.json(), async (req, res) => {
         await sendPushNotification(hotel.fcmToken, {
           title: "🚨 Incoming Order Request!",
           body: "Someone’s hungry and counting on you. Tap to accept.⚡️",
+          android: {
+            sound: "magicmenu_zing_enhanced",
+            channelId: "custom-sound-channel",
+          },
         });
       }
 
