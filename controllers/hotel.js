@@ -2165,8 +2165,13 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
 
     const totalOrders = deliveredOrders.length;
 
-    const commissionRate = 0.2; //0.1
-    const gstRate = 0.18; //0.0
+    const hotel = await Owner.findById(user_id);
+    if (!hotel) {
+      return res.status(404).json({ error: "Restaurant owner not found" });
+    }
+
+    const commissionRate = hotel.commissionRate || 0; //0.2
+    const gstRate = hotel.gstRate || 0; //0.18
 
     const commissionAmount = parseFloat(
       (grossRevenue * commissionRate).toFixed(2)
@@ -2190,8 +2195,8 @@ module.exports.getWeeklyRevenueReport = async (req, res) => {
       grossRevenue: parseFloat(grossRevenue.toFixed(2)),
       rejectedOrders: rejectedOrders.length,
       rejectedAmount: parseFloat(rejectedAmount.toFixed(2)),
-      commissionRate: 20,
-      taxRate: 18,
+      commissionRate: commissionRate * 100,
+      taxRate: gstRate * 100,
       commissionAmount,
       taxOnCommission,
       netRevenue,
