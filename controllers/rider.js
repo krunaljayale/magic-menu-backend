@@ -251,7 +251,7 @@ module.exports.toggleDuty = async (req, res) => {
 module.exports.newOrder = async (req, res) => {
   try {
     const { rider_latitude, rider_longitude, riderId } = req.body;
-    
+
     const rider = await Rider.findById(riderId);
     if (rider.isBlocked) {
       return res
@@ -515,6 +515,7 @@ module.exports.getHotelData = async (req, res) => {
     res.status(200).json({
       hotelName: hotel.hotel,
       hotelAddress: hotel.location.address,
+      riderMetaData: liveOrder.riderMetaData,
       hotelPhone: hotel.number,
       hotelCoords: {
         latitude: hotel.location.latitude,
@@ -554,6 +555,7 @@ module.exports.getOrderData = async (req, res) => {
       orderNumber: liveOrder.ticketNumber,
       hotelName: hotel.hotel,
       orderItems: orderItems,
+      riderMetaData: liveOrder.riderMetaData,
     });
   } catch (error) {
     console.error("Error fetching order data:", error);
@@ -598,6 +600,7 @@ module.exports.getCustomerData = async (req, res) => {
         latitude: location.latitude,
         longitude: location.longitude,
       },
+      riderMetaData: liveOrder.riderMetaData,
     });
   } catch (err) {
     console.error("Error in getCustomerData:", err);
@@ -627,6 +630,7 @@ module.exports.getCompleteOrderData = async (req, res) => {
 
     const orderData = {
       orderNumber: liveOrder.ticketNumber,
+      riderMetaData: liveOrder.riderMetaData,
       orderItems,
     };
 
@@ -839,15 +843,17 @@ module.exports.acceptOrder = async (req, res) => {
 module.exports.reachedPickup = async (req, res) => {
   try {
     const { user_id } = req.params;
-    const { imageURL } = req.body;
+    const { imageURL, riderMetaData } = req.body;
 
-    if (!user_id || !imageURL) {
-      return res.status(400).json({ message: "Missing user_id or imageURL" });
+    if (!user_id || !imageURL || !riderMetaData) {
+      return res
+        .status(400)
+        .json({ message: "Missing user_id or imageURL or riderMetaData" });
     }
 
     // 1️⃣ Update metadata
     const updatedMeta = await RiderMetaData.findOneAndUpdate(
-      { riderId: user_id },
+      { _id: riderMetaData },
       {
         selfieAtRestaurant: imageURL,
         reachedRestaurantAt: Date.now(),
@@ -875,6 +881,7 @@ module.exports.reachedPickup = async (req, res) => {
 
 module.exports.orderPickedup = async (req, res) => {
   const { user_id } = req.params;
+  const { riderMetaData } = req.body;
   const session = await mongoose.startSession();
 
   try {
@@ -901,7 +908,7 @@ module.exports.orderPickedup = async (req, res) => {
 
     // ✅ Update RiderMetaData
     const updatedMeta = await RiderMetaData.findOneAndUpdate(
-      { riderId: user_id },
+      { _id: riderMetaData },
       { pickupConfirmedAt: Date.now() },
       { new: true, session }
     );
@@ -992,10 +999,11 @@ module.exports.orderReachedDrop = async (req, res) => {
 
   try {
     const { user_id } = req.params;
+    const { riderMetaData } = req.body;
 
     // 1️⃣ Update RiderMetaData
     const updatedMeta = await RiderMetaData.findOneAndUpdate(
-      { riderId: user_id },
+      { _id: riderMetaData },
       { dropAt: Date.now() },
       { new: true, session }
     );
@@ -1079,7 +1087,7 @@ module.exports.orderReachedDrop = async (req, res) => {
 
 module.exports.completeOrder = async (req, res) => {
   const { order_id } = req.params;
-  const { rider_id, otp } = req.body;
+  const { rider_id, otp, riderMetaData } = req.body;
 
   const session = await mongoose.startSession();
 
@@ -1144,7 +1152,7 @@ module.exports.completeOrder = async (req, res) => {
       items: transformedItems,
       remarks: liveOrder.remarks,
       orderedAt: liveOrder.orderedAt,
-      preparationTime:liveOrder.preparationTime,
+      preparationTime: liveOrder.preparationTime,
       servedAt: liveOrder.servedAt,
       arrivedAt: liveOrder.arrivedAt,
       deliveredAt: liveOrder.deliveredAt,
@@ -1179,7 +1187,7 @@ module.exports.completeOrder = async (req, res) => {
     );
 
     await RiderMetaData.findOneAndUpdate(
-      { riderId: rider_id },
+      { _id: riderMetaData },
       { deliveredAt: Date.now() },
       { new: true, session }
     );
